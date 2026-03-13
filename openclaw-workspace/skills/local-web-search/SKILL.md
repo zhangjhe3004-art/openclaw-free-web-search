@@ -6,7 +6,8 @@ description: >
   parallel search (Bing/DuckDuckGo/Google/Startpage/Qwant), intent-aware
   Agent Reach query expansion, three-tier Browse/Viewing (Fetcher →
   StealthyFetcher → DynamicFetcher for Cloudflare/JS sites), cross-engine
-  anti-hallucination validation, and automatic public fallback.
+  anti-hallucination validation, multi-source factual claim cross-verification
+  with confidence scoring, and automatic public fallback.
 homepage: https://github.com/wd041216-bit/openclaw-free-web-search
 metadata:
   clawdbot:
@@ -16,7 +17,7 @@ metadata:
     files: ["scripts/*"]
 ---
 
-# Local Free Web Search v3.0
+# Local Free Web Search v4.0
 
 Use this skill when the user needs current or real-time web information.
 Powered by **Scrapling** (anti-bot) + **SearXNG** (self-hosted search).
@@ -31,6 +32,7 @@ Zero API keys. Zero cost. Runs entirely locally.
 | `http://127.0.0.1:18080` (local) | Search query string only | Local SearXNG instance |
 | `https://searx.be` (fallback only) | Search query string only | Public fallback when local SearXNG is down |
 | Any URL passed to `browse_page.py` | HTTP GET request only | Fetch page content for reading |
+| URLs found in search results (via `verify_claim.py`) | HTTP GET request only | Multi-source cross-validation |
 
 No personal data, no credentials, no conversation history is ever sent to any endpoint.
 
@@ -111,13 +113,57 @@ full extracted text, and anti-hallucination advisory.
 
 ---
 
+## Tool 3 — Factual Claim Cross-Verification
+
+```bash
+python3 ~/.openclaw/workspace/skills/local-web-search/scripts/verify_claim.py \
+  --claim "Claude 3.7 was released on February 24, 2025" \
+  --sources 5
+```
+
+**What it does:**
+1. Expands the claim into 3 search query variants
+2. Searches across multiple engines and collects up to N unique sources
+3. Fetches each source page via Scrapling cascade
+4. Classifies each source as AGREE / CONTRADICT / NEUTRAL
+5. Weights by domain authority (Wikipedia/Reuters/official sites = HIGH)
+6. Outputs a structured verdict with confidence score
+
+**Verdict levels:**
+
+| Verdict | Confidence | Meaning |
+|---|---|---|
+| `VERIFIED` ✅ | ≥75% | Majority of high-authority sources agree |
+| `LIKELY_TRUE` 🟢 | 55–74% | Most sources agree, some low-authority |
+| `UNCERTAIN` 🟡 | 35–54% | Sources disagree or insufficient data |
+| `LIKELY_FALSE` 🔴 | 15–34% | Majority of sources contradict |
+| `UNVERIFIABLE` ⬜ | <15% | No relevant sources found |
+
+**Flags:**
+
+| Flag | Description |
+|---|---|
+| `--sources N` | Number of sources to check (default: 5, max recommended: 10) |
+| `--searxng-url URL` | Override SearXNG URL |
+| `--json` | Machine-readable JSON output |
+
+---
+
 ## Recommended Workflow
 
+**Standard (search + read):**
 1. Run `search_local_web.py` — review results by Score and `[cross-validated]` tag
 2. Run `browse_page.py` on the top URL — check Confidence level
 3. If Confidence is LOW (paywall/blocked) — retry with `--mode stealth` or try next URL
 4. Answer only after reading HIGH-confidence page content
 5. **Never state facts from snippets alone**
+
+**Fact-checking (verify a specific claim):**
+1. Run `verify_claim.py --claim "..."` — get multi-source verdict
+2. Check `confidence` score and `sources_agreeing` / `sources_contradicting` counts
+3. Read the `evidence[].excerpt` for each source to understand context
+4. Only assert the claim if verdict is `VERIFIED` or `LIKELY_TRUE`
+5. If `UNCERTAIN` or `LIKELY_FALSE`, tell the user the claim could not be verified
 
 ---
 
@@ -135,3 +181,5 @@ cd "$(cat ~/.openclaw/workspace/skills/local-web-search/.project_root)" && ./sta
 - `search_local_web.py` and `browse_page.py` are complementary: **search first, browse second**.
 - Prefer `[cross-validated]` results (appeared in multiple engines) for factual claims.
 - For sites behind Cloudflare or requiring JS, use `browse_page.py --mode stealth`.
+- For specific factual claims (dates, numbers, names, events), use `verify_claim.py` to get a multi-source confidence score before asserting.
+- **Never assert a claim with `UNCERTAIN`, `LIKELY_FALSE`, or `UNVERIFIABLE` verdict** — tell the user the evidence is insufficient instead.

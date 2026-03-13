@@ -365,7 +365,7 @@ def _parallel_search(base_url: str, queries: list, engines: list,
 
 def main() -> int:
     p = argparse.ArgumentParser(
-        description="OpenClaw Free Web Search v3.0 — multi-engine, Scrapling-powered, zero API key."
+        description="OpenClaw Free Web Search v4.0 — multi-engine, Scrapling-powered, cross-validation, zero API key."
     )
     p.add_argument("--query", required=True, help="Search query")
     p.add_argument("--limit", type=int, default=5,
@@ -481,6 +481,8 @@ def main() -> int:
     print("  -> Prefer higher Score + [cross-validated] results.")
     print("  -> Use browse_page.py to read full page before answering.")
     print("  -> Do NOT state facts from snippets alone — always verify via page content.")
+    print("  -> For factual claims, use verify_claim.py for multi-source cross-validation:")
+    print(f'     python3 verify_claim.py --claim "<your claim here>" --sources 5')
     if not SCRAPLING_AVAILABLE:
         print("  -> TIP: pip install scrapling[all] for better public instance acceptance rate.")
     print("-" * 60)
