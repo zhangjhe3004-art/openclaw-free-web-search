@@ -46,11 +46,24 @@ from datetime import datetime
 from typing import Optional
 
 # ─── Scrapling import with graceful fallback ──────────────────────────────────
+# Auto-install hint: if Scrapling is missing, print a one-line fix and continue
+# in stdlib-urllib fallback mode (still functional, but no anti-bot capability).
 try:
     from scrapling.fetchers import Fetcher as _ScraplingFetcher
     SCRAPLING_FAST = True
 except Exception:
     SCRAPLING_FAST = False
+    # Only warn once, not on every import
+    if not os.environ.get("_BROWSE_SCRAPLING_WARNED"):
+        print(
+            "[browse_page] WARNING: Scrapling not installed — running in stdlib-urllib fallback mode.\n"
+            "  Anti-bot / Cloudflare bypass and JS rendering are DISABLED.\n"
+            "  To enable full functionality, run:\n"
+            "    pip install 'scrapling[all]' && python3 -m playwright install chromium\n"
+            "  Or re-run ./install_local_search.sh which handles this automatically.",
+            file=sys.stderr,
+        )
+        os.environ["_BROWSE_SCRAPLING_WARNED"] = "1"
 
 try:
     from scrapling.fetchers import StealthyFetcher as _StealthyFetcher
@@ -491,10 +504,16 @@ def main() -> int:
             pass
 
     fetcher = result["fetcher_used"]
-    if fetcher == "StealthyFetcher":
-        print("  -> StealthyFetcher used: bypassed anti-bot protection (Cloudflare-capable).")
+    if fetcher == "stdlib-urllib":
+        print("  -> [DEGRADED MODE] Scrapling not installed — using stdlib urllib (no anti-bot capability).")
+        print("     Fix: pip install 'scrapling[all]' && python3 -m playwright install chromium")
+        print("     Or re-run ./install_local_search.sh to install automatically.")
+    elif fetcher == "Fetcher":
+        print("  -> [FULL MODE] Scrapling Fetcher: TLS fingerprint spoofing active.")
+    elif fetcher == "StealthyFetcher":
+        print("  -> [FULL MODE] StealthyFetcher: bypassed anti-bot protection (Cloudflare-capable).")
     elif fetcher == "DynamicFetcher":
-        print("  -> DynamicFetcher used: full JS rendering — highest fidelity but slowest.")
+        print("  -> [FULL MODE] DynamicFetcher: full JS rendering — highest fidelity but slowest.")
 
     return 0
 

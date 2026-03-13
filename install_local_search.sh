@@ -77,6 +77,44 @@ else
   log "保留现有配置: ${LOCAL_SEARCH_SETTINGS_FILE}"
 fi
 
+# ─── 安装 Scrapling（browse_page.py 满血运行所需）──────────────────────────────
+log "安装 Scrapling（反爬抓取引擎，browse_page.py 核心依赖）"
+if "${PYTHON_BIN}" -c "import scrapling" 2>/dev/null; then
+  log "Scrapling 已安装，跳过"
+else
+  "${PYTHON_BIN}" -m pip install -q "scrapling[all]" \
+    && log "Scrapling 安装成功" \
+    || { log "[警告] Scrapling 安装失败，browse_page.py 将降级为 stdlib urllib 模式"; }
+fi
+
+# 安装 Playwright 浏览器（Scrapling DynamicFetcher / StealthyFetcher 所需）
+if "${PYTHON_BIN}" -c "from scrapling.fetchers import StealthyFetcher" 2>/dev/null; then
+  log "安装 Playwright 浏览器（首次约 100MB，仅需一次）"
+  "${PYTHON_BIN}" -m playwright install chromium --with-deps 2>&1 | tail -3 \
+    && log "Playwright Chromium 安装成功" \
+    || log "[警告] Playwright 安装失败，StealthyFetcher/DynamicFetcher 不可用，将使用 Fetcher 模式"
+fi
+
+# 验证 Scrapling 三级 fetcher 可用性
+log "验证 Scrapling fetcher 可用性..."
+"${PYTHON_BIN}" - <<'PYEOF'
+import sys
+results = []
+for name, mod in [
+    ("Fetcher",        "scrapling.fetchers.Fetcher"),
+    ("StealthyFetcher","scrapling.fetchers.StealthyFetcher"),
+    ("DynamicFetcher", "scrapling.fetchers.DynamicFetcher"),
+]:
+    try:
+        parts = mod.rsplit(".", 1)
+        m = __import__(parts[0], fromlist=[parts[1]])
+        getattr(m, parts[1])
+        results.append(f"  [OK]  {name}")
+    except Exception as e:
+        results.append(f"  [--]  {name} (不可用: {e})")
+print("\n".join(results))
+PYEOF
+
 if [[ -x "${ROOT_DIR}/sync_openclaw_workspace.sh" ]]; then
   log "同步 OpenClaw workspace 配置"
   "${ROOT_DIR}/sync_openclaw_workspace.sh"
