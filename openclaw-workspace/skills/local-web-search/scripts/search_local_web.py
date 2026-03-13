@@ -197,7 +197,7 @@ def main():
     is_fallback=used_url!=DEFAULT_LOCAL_URL
     print(f"Query     : {args.query}")
     print(f"Intent    : {args.intent}")
-    print(f"Engines   : {\', \'.join(engines)}")
+    print(f"Engines   : {', '.join(engines)}")
     if len(queries)>1: print(f"Expanded  : {len(queries)} sub-queries (Agent Reach)")
     if args.freshness: print(f"Freshness : {args.freshness}")
     print(f"Source    : {'public fallback ('+used_url+')' if is_fallback else 'local SearXNG'}")
@@ -205,10 +205,10 @@ def main():
     print()
 
     for idx,item in enumerate(results,1):
-        title  =item.get("title","").strip() or "(no title)"
-        url    =item.get("url","").strip() or "(no url)"
+        title  =(item.get("title") or "").strip() or "(no title)"
+        url    =(item.get("url") or "").strip() or "(no url)"
         snippet=" ".join((item.get("content") or "").split())
-        pub    =item.get("publishedDate","").strip()
+        pub    =(item.get("publishedDate") or "").strip()
         engs   =", ".join(item.get("_seen_in_engines",[]))
         score  =item.get("_score",0)
         cross  =item.get("_engine_count",1)>1

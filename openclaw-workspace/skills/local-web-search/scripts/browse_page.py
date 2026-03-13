@@ -57,15 +57,15 @@ BLOCKED_RE = re.compile("|".join(BLOCKED_PATTERNS), re.IGNORECASE)
 
 # Patterns to extract publication date from HTML meta tags
 DATE_META_PATTERNS = [
-    r'<meta[^>]+(?:property|name)=["\'](?:article:published_time|pubdate|date|og:updated_time|datePublished)["\'][^>]+content=["\']([0-9T:Z.+-]{10,25})["\'][^>]*/?>\',
-    r'<meta[^>]+content=["\']([0-9T:Z.+-]{10,25})["\'][^>]+(?:property|name)=["\'](?:article:published_time|pubdate|date)["\'][^>]*/?>\',
+    r'<meta[^>]+(?:property|name)=["\'](?:article:published_time|pubdate|date|og:updated_time|datePublished)["\'][^>]+content=["\']([0-9T:Z.+-]{10,25})["\'][^>]*/?>',
+    r'<meta[^>]+content=["\']([0-9T:Z.+-]{10,25})["\'][^>]+(?:property|name)=["\'](?:article:published_time|pubdate|date)["\'][^>]*/?>',
     r'<time[^>]+datetime=["\']([0-9T:Z.+-]{10,25})["\'][^>]*>',
 ]
 
 # Main content container selectors (heuristic, no external libs)
 MAIN_CONTENT_SELECTORS = [
     r"<article[^>]*>(.*?)</article>",
-    r'<div[^>]+(?:class|id)=["\'][^"\']*(?:article|post|content|main|entry|body)[^"\']*["\'][^>]*>(.*?)</div>\',
+    r'<div[^>]+(?:class|id)=["\'][^"\']*(?:article|post|content|main|entry|body)[^"\']*["\'][^>]*>(.*?)</div>',
     r"<main[^>]*>(.*?)</main>",
 ]
 

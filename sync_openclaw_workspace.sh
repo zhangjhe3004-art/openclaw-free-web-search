@@ -16,6 +16,14 @@ if [[ -d "${SOURCE_SKILL_DIR}" ]]; then
   cp "${SOURCE_SKILL_DIR}/SKILL.md" "${TARGET_SKILL_DIR}/SKILL.md"
   cp "${SOURCE_SKILL_DIR}/scripts/search_local_web.py" "${TARGET_SKILL_DIR}/scripts/search_local_web.py"
   chmod +x "${TARGET_SKILL_DIR}/scripts/search_local_web.py"
+  # v2.0: also sync browse_page.py and AGENTS.md
+  if [[ -f "${SOURCE_SKILL_DIR}/scripts/browse_page.py" ]]; then
+    cp "${SOURCE_SKILL_DIR}/scripts/browse_page.py" "${TARGET_SKILL_DIR}/scripts/browse_page.py"
+    chmod +x "${TARGET_SKILL_DIR}/scripts/browse_page.py"
+  fi
+  if [[ -f "${SOURCE_SKILL_DIR}/AGENTS.md" ]]; then
+    cp "${SOURCE_SKILL_DIR}/AGENTS.md" "${TARGET_SKILL_DIR}/AGENTS.md"
+  fi
 fi
 
 # Write the project root path so the search script can generate correct error messages
@@ -32,21 +40,20 @@ start = "<!-- codex:local-web-search:start -->"
 end = "<!-- codex:local-web-search:end -->"
 block = """<!-- codex:local-web-search:start -->
 
-## Local Web Search
+## Local Web Search (v2.0)
 
 When the user asks for latest, current, today's, breaking, real-time, price, release, version, or other time-sensitive information:
 
-1. Run `python3 ~/.openclaw/workspace/skills/local-web-search/scripts/search_local_web.py --query "<query>" --limit 5`
-2. Review the results and pick the most relevant URLs.
-3. Use `web_fetch` to read the selected pages before answering.
-4. Include dates and links when recency matters.
+1. Search: `python3 ~/.openclaw/workspace/skills/local-web-search/scripts/search_local_web.py --query "<query>" --intent <factual|news|research|tutorial|comparison|privacy|general> --limit 5`
+2. Review results — prefer higher Score and [cross-validated] results.
+3. Browse top URL: `python3 ~/.openclaw/workspace/skills/local-web-search/scripts/browse_page.py --url "<url>" --max-words 600`
+4. If Confidence is LOW (paywall/blocked), try the next URL.
+5. Answer only after reading HIGH-confidence page content. Always cite URL and date.
 
-`local-web-search` finds current candidate links. `web_fetch` reads the page content. Use them together.
+Do NOT state facts from snippets alone. Do NOT fabricate content if all sources fail.
 
 If the local search service is unavailable, tell the user to run:
 `cd "$(cat ~/.openclaw/workspace/skills/local-web-search/.project_root)" && ./start_local_search.sh`
-
-Do not claim current facts from memory alone when this workflow is available.
 
 <!-- codex:local-web-search:end -->"""
 
