@@ -1,77 +1,104 @@
-# OpenClaw Free Web Search v4.0
+# OpenClaw Free Web Search v4.1
 
-> **Zero-cost, zero-API-key, privacy-first web search for OpenClaw.**  
-> Self-hosted SearXNG + **Scrapling anti-bot engine** + multi-source **cross-validation** to eliminate AI hallucinations.
+> **Zero-cost · Zero-API-key · Privacy-first · Model-agnostic**
+> The only free OpenClaw web search skill that tells you **how much to trust the answer** — and works with **any LLM** you configure as your commander.
 
-[中文文档](./README_zh.md)
+[中文文档](./README_zh.md) · [Report Issue](https://github.com/wd041216-bit/openclaw-free-web-search/issues)
 
 ---
 
-## What's New in v4.0 — Cross-Validation Engine
+## What makes this different
 
-The only free OpenClaw web search skill that tells you **how much to trust the answer**.
+Most free OpenClaw search skills give you a list of URLs. This skill gives you a **verdict**.
 
-| Feature | Description |
+Every answer produced by this skill comes with a confidence score backed by multi-source cross-validation. Before your agent asserts a fact, it checks that fact against 3–10 independent sources, weights them by domain authority, and tells you whether the claim is `VERIFIED`, `LIKELY_TRUE`, `UNCERTAIN`, or `LIKELY_FALSE`. No other free skill in the community does this.
+
+v4.1 adds **automatic proxy detection** and **local Chrome detection** — so the skill works out of the box on machines running Clash, V2Ray, or any other local proxy, without any manual configuration.
+
+---
+
+## Model compatibility — any commander, any LLM
+
+This skill is fully model-agnostic. It uses standard Python scripts invoked via shell commands. Any LLM that can run a shell command can use it — whether running locally via Ollama or vLLM, or accessed via API.
+
+| Commander model | Compatible |
 |---|---|
-| **`verify_claim.py`** | New third tool: multi-source factual cross-validation |
-| **Multi-source consensus** | Fetches 3–10 independent sources, checks agreement/contradiction |
-| **Authority-weighted scoring** | Wikipedia/Reuters/official sites count 3×; Medium/Reddit count 1× |
-| **Verdict system** | ✅ VERIFIED / 🟢 LIKELY_TRUE / 🟡 UNCERTAIN / 🔴 LIKELY_FALSE / ⬜ UNVERIFIABLE |
-| **`--urls` direct mode** | Verify against known URLs without SearXNG (works offline) |
-| **Recency scoring** | Sources older than 2 years are down-weighted automatically |
-| **Scrapling-powered** | All source fetching uses TLS fingerprint spoofing + Cloudflare bypass |
+| Claude 3.5 / 3.7 (Anthropic) | ✅ |
+| GPT-4 / GPT-4o (OpenAI) | ✅ |
+| Gemini 1.5 / 2.0 (Google) | ✅ |
+| Mistral / Mixtral | ✅ |
+| Llama 3 / 3.1 (Meta) | ✅ |
+| DeepSeek V3 / R1 | ✅ |
+| Qwen 3 / Qwen3-Coder (Alibaba) | ✅ |
+| Any model with shell tool access | ✅ |
 
 ---
 
-## Three-Tool Architecture
+## What's new in v4.1
+
+| Change | Details |
+|---|---|
+| **Model-agnostic** | Explicit compatibility declaration in SKILL.md and AGENTS.md; no model-specific assumptions anywhere |
+| **Proxy auto-detection** | Both `search_local_web.py` and `browse_page.py` auto-detect local proxies on ports 7890, 7897, 1080 before falling back to direct connection |
+| **Local Chrome detection** | `browse_page.py` detects `/Applications/Google Chrome.app` and passes `real_chrome=True` to StealthyFetcher/DynamicFetcher for better anti-bot evasion |
+| **TLS relaxation for local proxies** | When a local MITM proxy (Clash, mitmproxy) is detected, TLS verification is automatically relaxed to prevent certificate errors |
+| **AGENTS.md Step 3** | Standard workflow now includes `verify_claim.py` as an explicit third step |
+
+---
+
+## Three-tool architecture
 
 ```
-OpenClaw Agent
+OpenClaw Agent (any model)
     │
-    ├── 1. search_local_web.py   ← "Find relevant URLs"
+    ├── 1. search_local_web.py   ← Find relevant URLs
     │       ├── Intent-aware query expansion (Agent Reach)
     │       ├── Parallel multi-engine: Bing + DDG + Google + Startpage + Qwant
-    │       ├── Quality scoring (authority + freshness + cross-engine count)
+    │       ├── Quality scoring: authority (35%) + freshness (20%) + cross-engine (20%)
+    │       │                    + snippet density (15%) + title quality (10%)
     │       ├── Paywall / 404 / login-wall filter
-    │       └── SearXNG (local Docker) → public fallback
+    │       ├── Proxy auto-detection (env vars + ports 7890/7897/1080)
+    │       └── SearXNG (local) → public fallback (searx.be)
     │
-    ├── 2. browse_page.py        ← "Read a page deeply"
-    │       ├── Tier 1: Scrapling Fetcher (TLS fingerprint, ~1-3s)
-    │       ├── Tier 2: StealthyFetcher (Cloudflare bypass, ~5-15s)
-    │       ├── Tier 3: DynamicFetcher (full Playwright JS, ~10-30s)
-    │       ├── Tier 4: stdlib urllib (no-Scrapling fallback)
+    ├── 2. browse_page.py        ← Read a page deeply
+    │       ├── Tier 1: Scrapling Fetcher (TLS fingerprint spoofing, ~1–3s)
+    │       ├── Tier 2: StealthyFetcher (Cloudflare Turnstile bypass, ~5–15s)
+    │       ├── Tier 3: DynamicFetcher (full Playwright JS rendering, ~10–30s)
+    │       ├── Tier 4: stdlib urllib (no-Scrapling graceful fallback)
+    │       ├── Proxy auto-detection + local Chrome detection (macOS)
     │       ├── Adaptive CSS content extraction
     │       ├── Paywall detection + publication date extraction
     │       └── Confidence: HIGH / MEDIUM / LOW
     │
-    └── 3. verify_claim.py       ← "How much should I trust this?"
-            ├── Expands claim into 3 search queries
+    └── 3. verify_claim.py       ← How much should I trust this?
+            ├── Expands claim into 3 search query variants
             ├── Fetches 3–10 independent sources in parallel
             ├── Classifies each source: AGREE / CONTRADICT / NEUTRAL
-            ├── Authority-weighted confidence score (0–100%)
-            ├── Cross-agreement bonus (sources that agree boost each other)
+            ├── Authority-weighted confidence (Wikipedia/Reuters = 3×; Reddit = 1×)
+            ├── Cross-agreement bonus (agreeing sources reinforce each other)
+            ├── --urls direct mode: verify against known URLs, no SearXNG needed
             └── Verdict: VERIFIED / LIKELY_TRUE / UNCERTAIN / LIKELY_FALSE / UNVERIFIABLE
 ```
 
 ---
 
-## Recommended Workflow
+## Recommended workflow
 
 ```
 User question
     │
     ▼
-search_local_web.py  →  get top 5 URLs + quality scores
+search_local_web.py  →  top 5 URLs + quality scores + [cross-validated] tags
     │
     ▼
-browse_page.py       →  read full content of top 1–2 URLs
-    │                   check Confidence (HIGH / MEDIUM / LOW)
+browse_page.py       →  full page content, Confidence: HIGH / MEDIUM / LOW
+    │                   retry with --mode stealth for Cloudflare-protected sites
     ▼
-verify_claim.py      →  cross-validate key facts before answering
-    │                   VERIFIED / LIKELY_TRUE → answer confidently
-    │                   UNCERTAIN / LIKELY_FALSE → say so explicitly
+verify_claim.py      →  multi-source verdict before asserting key facts
+    │                   VERIFIED / LIKELY_TRUE → answer confidently with citation
+    │                   UNCERTAIN / LIKELY_FALSE → tell the user explicitly
     ▼
-Answer with citations + confidence level
+Answer with source URL + publication date + confidence level
 ```
 
 ---
@@ -79,7 +106,6 @@ Answer with citations + confidence level
 ## Requirements
 
 - macOS (Apple Silicon or Intel)
-- Docker Desktop (for SearXNG)
 - Python 3.8+
 - OpenClaw desktop app
 
@@ -90,16 +116,18 @@ pip install scrapling[all]
 python -m playwright install chromium
 ```
 
+The install script handles all of this automatically.
+
 ---
 
-## Quick Start
+## Quick start
 
 ```bash
 # 1. Clone
 git clone https://github.com/wd041216-bit/openclaw-free-web-search.git
 cd openclaw-free-web-search
 
-# 2. Install everything (SearXNG + Scrapling + Playwright)
+# 2. One-click install (SearXNG + Scrapling + Playwright)
 ./install_local_search.sh
 
 # 3. Start SearXNG
@@ -115,25 +143,25 @@ cd openclaw-free-web-search
 
 ## Usage
 
-### 1. Web Search
+### 1. Web search
 
 ```bash
 python3 ~/.openclaw/workspace/skills/local-web-search/scripts/search_local_web.py \
   --query "Claude 4 release date" --intent news --limit 5
 
 # Search + auto-browse top result
-python3 ... --query "UW iSchool dean" --intent factual --browse
+python3 ... --query "DeepSeek V3 architecture" --intent research --browse
 
-# Downrank old results
-python3 ... --query "Python best practices" --max-age-days 90
+# Downrank results older than 30 days
+python3 ... --query "AI model rankings" --max-age-days 30
 ```
 
-### 2. Browse a Page
+### 2. Browse a page
 
 ```bash
 # Auto mode (Scrapling cascade: fast → stealth → dynamic)
 python3 ~/.openclaw/workspace/skills/local-web-search/scripts/browse_page.py \
-  --url "https://anthropic.com/news/..." --max-words 600
+  --url "https://example.com/article" --max-words 600
 
 # Force stealth (Cloudflare-protected sites)
 python3 ... --url "https://..." --mode stealth
@@ -142,19 +170,19 @@ python3 ... --url "https://..." --mode stealth
 python3 ... --url "https://..." --mode dynamic
 ```
 
-### 3. Verify a Claim
+### 3. Verify a claim
 
 ```bash
 # Auto mode: SearXNG finds sources automatically
 python3 ~/.openclaw/workspace/skills/local-web-search/scripts/verify_claim.py \
-  --claim "Claude 3.7 Sonnet was released by Anthropic in February 2025" \
+  --claim "DeepSeek V3 was released in 2025 with 671B parameters" \
   --sources 5
 
 # Direct URL mode: no SearXNG needed
 python3 ... \
-  --claim "Claude 3.7 Sonnet was released by Anthropic in February 2025" \
-  --urls https://anthropic.com/news/claude-3-7-sonnet \
-         https://en.wikipedia.org/wiki/Claude_(language_model)
+  --claim "DeepSeek V3 was released in 2025 with 671B parameters" \
+  --urls https://deepseek.com/blog/... \
+         https://en.wikipedia.org/wiki/DeepSeek
 
 # Machine-readable JSON output
 python3 ... --claim "..." --json
@@ -164,21 +192,23 @@ python3 ... --claim "..." --json
 
 ```
 VERDICT    : 🟢 LIKELY_TRUE
-CONFIDENCE : 67%
-SOURCES    : 3 checked  (2 agree / 0 contradict / 1 neutral)
+CONFIDENCE : 72%
+SOURCES    : 4 checked  (3 agree / 0 contradict / 1 neutral)
 MODE       : FULL (Scrapling + StealthyFetcher)
 
-[1] ✅ anthropic.com  [HIGH]  score=0.83
-    Excerpt: "Claude 3.7 Sonnet and Claude Code Feb 24, 2025 Today, we're announcing..."
+[1] ✅ deepseek.com  [HIGH]  score=0.87
+    Excerpt: "DeepSeek-V3, a strong Mixture-of-Experts (MoE) language model with 671B total parameters..."
 
-[2] ✅ en.wikipedia.org  [HIGH]  score=0.83
+[2] ✅ en.wikipedia.org  [HIGH]  score=0.85
 
-[3] ➖ techcrunch.com  [HIGH]  score=0.46
+[3] ✅ arxiv.org  [HIGH]  score=0.81
+
+[4] ➖ techcrunch.com  [HIGH]  score=0.44
 ```
 
 ---
 
-## Verdict Reference
+## Verdict reference
 
 | Verdict | Confidence | Meaning |
 |---|---|---|
@@ -190,7 +220,7 @@ MODE       : FULL (Scrapling + StealthyFetcher)
 
 ---
 
-## Intent Options (search_local_web.py)
+## Intent options (search_local_web.py)
 
 | Intent | Best for | Engines used |
 |---|---|---|
@@ -204,7 +234,7 @@ MODE       : FULL (Scrapling + StealthyFetcher)
 
 ---
 
-## Fetcher Modes (browse_page.py)
+## Fetcher modes (browse_page.py)
 
 | Mode | Engine | Use case | Speed |
 |---|---|---|---|
@@ -225,23 +255,26 @@ MODE       : FULL (Scrapling + StealthyFetcher)
 
 ---
 
-## Environment Variables
+## Environment variables
 
 | Variable | Default | Description |
 |---|---|---|
 | `LOCAL_SEARCH_URL` | `http://127.0.0.1:18080` | Local SearXNG base URL |
 | `LOCAL_SEARCH_FALLBACK_URL` | `https://searx.be` | Public fallback when local is down |
+| `LOCAL_SEARCH_PROXY` | _(auto-detected)_ | Override proxy (e.g. `http://127.0.0.1:7890`) |
+
+Proxy detection priority: `LOCAL_SEARCH_PROXY` > `HTTPS_PROXY` > `ALL_PROXY` > auto-probe ports 7890/7897/1080.
 
 ---
 
-## Comparison with Other Free Skills
+## Comparison with other free skills
 
-| Skill | Search | Browse | Anti-bot | Cross-Validation | Install |
+| Skill | Search | Anti-bot Browse | Cross-Validation | Proxy Support | Model-Agnostic |
 |---|---|---|---|---|---|
-| **This skill (v4.0)** | ✅ Multi-engine | ✅ 3-tier Scrapling | ✅ Cloudflare bypass | ✅ Multi-source verdict | One-click |
-| `hugoreno/scrapling-browse` | ❌ None | ✅ Scrapling | ✅ | ❌ None | Manual |
-| `keef-agent/openclaw-scrapling` | ❌ None | ✅ Scrapling | ✅ | ❌ None | Manual |
-| Generic SearXNG skills | ✅ Single-engine | ❌ `web_fetch` only | ❌ | ❌ None | Manual |
+| **This skill (v4.1)** | ✅ Multi-engine | ✅ 3-tier Scrapling | ✅ Multi-source verdict | ✅ Auto-detect | ✅ Any LLM |
+| `hugoreno/scrapling-browse` | ❌ | ✅ Scrapling | ❌ | ❌ | ✅ |
+| `keef-agent/openclaw-scrapling` | ❌ | ✅ Scrapling | ❌ | ❌ | ✅ |
+| Generic SearXNG skills | ✅ Single-engine | ❌ `web_fetch` only | ❌ | ❌ | ✅ |
 
 ---
 
