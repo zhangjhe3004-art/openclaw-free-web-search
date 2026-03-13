@@ -2,17 +2,22 @@
 name: local-web-search
 description: >
   Free, private, real-time web search using a self-hosted local SearXNG instance.
+  Powered by Scrapling for anti-bot bypass (Cloudflare, JS-heavy sites).
   Supports multi-engine parallel search (Bing/DuckDuckGo/Google/Startpage/Qwant),
-  intent-aware query expansion (Agent Reach), full-page Browse/Viewing, cross-engine
-  anti-hallucination validation, invalid page filtering, and automatic public fallback.
-  Zero API keys required. Use for current events, latest releases, research, comparisons,
-  tutorials, or any query requiring live internet search.
+  intent-aware query expansion (Agent Reach), three-tier Browse/Viewing
+  (Fetcher → StealthyFetcher → DynamicFetcher), cross-engine anti-hallucination
+  validation, invalid page filtering, and automatic public fallback.
+  Zero API keys required. Use for current events, latest releases, research,
+  comparisons, tutorials, or any query requiring live internet search.
 ---
 
-# Local Free Web Search v2.0
+# Local Free Web Search v3.0
 
-Use this skill when the user needs current or real-time web information and the environment
-uses the free local SearXNG setup instead of a paid web_search provider.
+Use this skill when the user needs current or real-time web information.
+Powered by **Scrapling** (anti-bot) + **SearXNG** (self-hosted search).
+Zero API keys. Zero cost. Runs entirely locally.
+
+---
 
 ## Tool 1 — Web Search
 
@@ -36,10 +41,17 @@ python3 ~/.openclaw/workspace/skills/local-web-search/scripts/search_local_web.p
 | `privacy` | Sensitive queries (ddg/startpage/qwant only) |
 
 **Additional flags:**
-- `--engines bing,duckduckgo,google,startpage,qwant` — override engine selection
-- `--freshness hour|day|week|month|year` — filter by recency
-- `--no-expand` — disable Agent Reach query expansion
-- `--json` — machine-readable JSON output
+
+| Flag | Description |
+|---|---|
+| `--engines bing,duckduckgo,...` | Override engine selection |
+| `--freshness hour\|day\|week\|month\|year` | Filter by recency |
+| `--max-age-days N` | Downrank results older than N days |
+| `--browse` | Auto-fetch top result with browse_page.py |
+| `--no-expand` | Disable Agent Reach query expansion |
+| `--json` | Machine-readable JSON output |
+
+---
 
 ## Tool 2 — Browse/Viewing (read full page)
 
@@ -49,16 +61,29 @@ python3 ~/.openclaw/workspace/skills/local-web-search/scripts/browse_page.py \
   --max-words 600
 ```
 
-Returns: title, published date, word count, confidence level (HIGH/MEDIUM/LOW),
+**Fetcher modes** (use `--mode` flag):
+
+| Mode | Fetcher | Use case |
+|---|---|---|
+| `auto` | Tier 1 → 2 → 3 | Default — tries fast first |
+| `fast` | `Fetcher` | Normal sites |
+| `stealth` | `StealthyFetcher` | Cloudflare / anti-bot sites |
+| `dynamic` | `DynamicFetcher` | Heavy JS / SPA sites |
+
+Returns: title, published date, word count, confidence (HIGH/MEDIUM/LOW),
 full extracted text, and anti-hallucination advisory.
+
+---
 
 ## Recommended Workflow
 
 1. Run `search_local_web.py` — review results by Score and `[cross-validated]` tag
 2. Run `browse_page.py` on the top URL — check Confidence level
-3. If Confidence is LOW (paywall/blocked) — try the next URL
+3. If Confidence is LOW (paywall/blocked) — retry with `--mode stealth` or try next URL
 4. Answer only after reading HIGH-confidence page content
-5. Never state facts from snippets alone
+5. **Never state facts from snippets alone**
+
+---
 
 ## Rules
 
@@ -71,5 +96,6 @@ cd "$(cat ~/.openclaw/workspace/skills/local-web-search/.project_root)" && ./sta
 ```
 
 - Do NOT invent search results if all sources fail.
-- `search_local_web.py` and `browse_page.py` are complementary: search first, browse second.
+- `search_local_web.py` and `browse_page.py` are complementary: **search first, browse second**.
 - Prefer `[cross-validated]` results (appeared in multiple engines) for factual claims.
+- For sites behind Cloudflare or requiring JS, use `browse_page.py --mode stealth`.

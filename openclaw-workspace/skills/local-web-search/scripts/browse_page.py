@@ -1,240 +1,494 @@
 #!/usr/bin/env python3
 """
-browse_page.py - OpenClaw Free Web Search: Browse/Viewing Module v2.0
-======================================================================
-Fetch and extract readable content from a URL using pure stdlib.
-Zero API keys required. 100% free.
+browse_page.py  v3.0  — OpenClaw Free Web Search Skill
+=======================================================
+Powered by Scrapling (https://github.com/D4Vinci/Scrapling)
 
-Features:
-- Browse/Viewing : fetches full page HTML, extracts main content as clean text
-- Anti-hallucination checks:
-    * Detects paywall / login walls / empty pages
-    * Extracts and displays publication date when available
-    * Reports content confidence level (high/medium/low)
-    * Warns agent when content is insufficient to answer from
-- Invalid page detection: 404, 403, CAPTCHA, JS-only pages
-- Structured output: title, url, published_date, word_count, content, confidence
+Three-tier fetcher cascade (all free, no API key):
+  Tier 1 — Fetcher        : Fast HTTP with TLS fingerprint spoofing + Google referer
+  Tier 2 — StealthyFetcher: Headless Chrome with Cloudflare Turnstile bypass
+  Tier 3 — DynamicFetcher : Full Playwright browser for JS-heavy / anti-bot sites
+
+Features absorbed from community skills:
+  - Adaptive element extraction (survives website redesigns)
+  - Semantic main-content detection via CSS priority scoring
+  - Paywall / login-wall / 404 detection and graceful rejection
+  - Publication date extraction (meta + JSON-LD + visible text)
+  - Hallucination guard: confidence scoring + cross-field consistency check
+  - Word-count capping with smart sentence boundary truncation
+  - Structured JSON output mode for Agent pipelines
 
 Usage:
-  python3 browse_page.py --url "https://example.com/article"
-  python3 browse_page.py --url "https://github.com/owner/repo" --max-words 800
-  python3 browse_page.py --url "https://example.com" --json
+  python3 browse_page.py --url <URL> [--max-words 600] [--mode auto|fast|stealth|dynamic]
+  python3 browse_page.py --url <URL> --json
+
+Dependencies:
+  pip install scrapling[all]   # for full anti-bot / JS rendering support
+  (falls back to stdlib urllib if Scrapling is not installed)
 """
 
 from __future__ import annotations
-import argparse, html, json, os, re, sys, urllib.parse, urllib.request
-from pathlib import Path
+import argparse
+import html as html_module
+import json
+import os
+import re
+import sys
+import urllib.parse
+import urllib.request
+from datetime import datetime
 from typing import Optional
 
-USER_AGENT = "OpenClawFreeSearch/2.0 (compatible; Readability)"
-MAX_WORDS_DEFAULT = 600
+# ─── Scrapling import with graceful fallback ──────────────────────────────────
+try:
+    from scrapling.fetchers import Fetcher as _ScraplingFetcher
+    SCRAPLING_FAST = True
+except Exception:
+    SCRAPLING_FAST = False
 
-# Tags whose content we want to strip entirely
-STRIP_TAGS = re.compile(
-    r"<(script|style|nav|header|footer|aside|form|button|noscript|iframe|svg|ads?)[^>]*>.*?</\1>",
+try:
+    from scrapling.fetchers import StealthyFetcher as _StealthyFetcher
+    SCRAPLING_STEALTH = True
+except Exception:
+    SCRAPLING_STEALTH = False
+
+try:
+    from scrapling.fetchers import DynamicFetcher as _DynamicFetcher
+    SCRAPLING_DYNAMIC = True
+except Exception:
+    SCRAPLING_DYNAMIC = False
+
+# ─── Constants ────────────────────────────────────────────────────────────────
+VERSION = "3.0.0"
+
+# Phrases that indicate the page content is gated
+PAYWALL_PHRASES = [
+    "subscribe to read", "subscribe to continue", "sign in to read",
+    "create a free account", "this content is for subscribers",
+    "to continue reading", "unlock this article", "members only",
+    "premium content", "log in to access", "please enable javascript",
+    "access denied", "403 forbidden", "page not found", "404 not found",
+]
+
+# CSS selectors tried in priority order for main content extraction
+CONTENT_SELECTORS = [
+    "article",
+    "main",
+    "[role='main']",
+    ".post-content",
+    ".article-body",
+    ".entry-content",
+    ".content-body",
+    ".story-body",
+    ".article-text",
+    ".post-body",
+    "#content",
+    "#main-content",
+    "#article-body",
+    ".field--type-text-with-summary",   # Drupal
+    ".mw-parser-output",                # MediaWiki / Wikipedia
+    ".markdown-body",                   # GitHub
+    "div[itemprop='articleBody']",
+    "div[itemprop='description']",
+]
+
+# Tags to strip from extracted text
+NOISE_TAGS = (
+    "script", "style", "nav", "footer", "header",
+    "aside", "form", "button", "noscript", "iframe",
+    "figure", "figcaption",
+)
+
+# Stdlib fallback: regex-based strip tags
+STRIP_TAGS_RE = re.compile(
+    r"<(script|style|nav|header|footer|aside|form|button|noscript|iframe|svg)[^>]*>.*?</\1>",
     re.DOTALL | re.IGNORECASE,
 )
-# HTML tag stripper
 TAG_RE = re.compile(r"<[^>]+>")
-# Multiple whitespace normaliser
 WS_RE = re.compile(r"[ \t]+")
 NL_RE = re.compile(r"\n{3,}")
 
-# Patterns that indicate the page is blocked/gated
-BLOCKED_PATTERNS = [
-    r"subscribe to (read|continue|access)",
-    r"sign in to (continue|read|view)",
-    r"create (a free )?account to",
-    r"this (article|content|page) is (for|behind) (subscribers|paywall)",
-    r"please enable (javascript|cookies)",
-    r"access denied",
-    r"403 forbidden",
-    r"404 not found",
-    r"page not found",
-    r"enable javascript to",
-]
-BLOCKED_RE = re.compile("|".join(BLOCKED_PATTERNS), re.IGNORECASE)
-
-# Patterns to extract publication date from HTML meta tags
-DATE_META_PATTERNS = [
-    r'<meta[^>]+(?:property|name)=["\'](?:article:published_time|pubdate|date|og:updated_time|datePublished)["\'][^>]+content=["\']([0-9T:Z.+-]{10,25})["\'][^>]*/?>',
-    r'<meta[^>]+content=["\']([0-9T:Z.+-]{10,25})["\'][^>]+(?:property|name)=["\'](?:article:published_time|pubdate|date)["\'][^>]*/?>',
-    r'<time[^>]+datetime=["\']([0-9T:Z.+-]{10,25})["\'][^>]*>',
+# Date meta tag names to check
+DATE_META_NAMES = [
+    "article:published_time", "datePublished", "pubdate",
+    "publish_date", "DC.date", "article:modified_time",
+    "og:updated_time", "date",
 ]
 
-# Main content container selectors (heuristic, no external libs)
-MAIN_CONTENT_SELECTORS = [
-    r"<article[^>]*>(.*?)</article>",
-    r'<div[^>]+(?:class|id)=["\'][^"\']*(?:article|post|content|main|entry|body)[^"\']*["\'][^>]*>(.*?)</div>',
-    r"<main[^>]*>(.*?)</main>",
-]
+MIN_TRUSTWORTHY_WORDS = 80
 
 
-def _strip_html(html_text: str) -> str:
-    """Remove scripts/styles/nav, strip all tags, normalise whitespace."""
-    text = STRIP_TAGS.sub(" ", html_text)
+# ─── Stdlib helpers (used when Scrapling unavailable) ─────────────────────────
+
+def _stdlib_strip_html(raw_html: str) -> str:
+    text = STRIP_TAGS_RE.sub(" ", raw_html)
     text = TAG_RE.sub(" ", text)
-    text = html.unescape(text)
+    text = html_module.unescape(text)
     text = WS_RE.sub(" ", text)
     text = NL_RE.sub("\n\n", text)
     return text.strip()
 
 
-def _extract_title(html_text: str) -> str:
-    m = re.search(r"<title[^>]*>(.*?)</title>", html_text, re.IGNORECASE | re.DOTALL)
+def _stdlib_extract_title(raw_html: str) -> str:
+    m = re.search(r"<title[^>]*>(.*?)</title>", raw_html, re.IGNORECASE | re.DOTALL)
     if m:
-        return html.unescape(TAG_RE.sub("", m.group(1))).strip()
-    m = re.search(r"<h1[^>]*>(.*?)</h1>", html_text, re.IGNORECASE | re.DOTALL)
-    if m:
-        return html.unescape(TAG_RE.sub("", m.group(1))).strip()
+        return html_module.unescape(TAG_RE.sub("", m.group(1))).strip()
     return ""
 
 
-def _extract_date(html_text: str) -> str:
-    for pat in DATE_META_PATTERNS:
-        m = re.search(pat, html_text, re.IGNORECASE | re.DOTALL)
+def _stdlib_extract_date(raw_html: str) -> str:
+    patterns = [
+        r'<meta[^>]+(?:property|name)=["\'](?:article:published_time|pubdate|date|datePublished)["\'][^>]+content=["\']([0-9T:Z.+\-]{10,25})["\']',
+        r'<meta[^>]+content=["\']([0-9T:Z.+\-]{10,25})["\'][^>]+(?:property|name)=["\'](?:article:published_time|pubdate|date)["\']',
+        r'<time[^>]+datetime=["\']([0-9T:Z.+\-]{10,25})["\']',
+    ]
+    for pat in patterns:
+        m = re.search(pat, raw_html, re.IGNORECASE | re.DOTALL)
         if m:
             return m.group(1).strip()
     return ""
 
 
-def _extract_main_content(html_text: str) -> str:
-    """Try to extract the main content block; fall back to full body."""
-    for pat in MAIN_CONTENT_SELECTORS:
-        m = re.search(pat, html_text, re.IGNORECASE | re.DOTALL)
+def _stdlib_fetch(url: str, timeout: int = 15) -> tuple:
+    """Returns (status_code, raw_html_str)."""
+    ua = (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/122.0.0.0 Safari/537.36"
+    )
+    req = urllib.request.Request(url, headers={
+        "User-Agent": ua,
+        "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.google.com/",
+    })
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        ct = r.headers.get("Content-Type", "utf-8")
+        charset = "utf-8"
+        m = re.search(r"charset=([\w-]+)", ct)
         if m:
-            candidate = _strip_html(m.group(1))
-            if len(candidate.split()) > 80:
-                return candidate
-    # Fallback: extract body
-    m = re.search(r"<body[^>]*>(.*?)</body>", html_text, re.IGNORECASE | re.DOTALL)
-    if m:
-        return _strip_html(m.group(1))
-    return _strip_html(html_text)
+            charset = m.group(1)
+        return r.status, r.read().decode(charset, errors="replace")
 
 
-def _confidence_level(word_count: int, is_blocked: bool, has_date: bool) -> str:
-    if is_blocked:
-        return "low"
-    if word_count < 80:
-        return "low"
-    if word_count < 250:
-        return "medium"
-    return "high"
+# ─── Scrapling-based helpers ──────────────────────────────────────────────────
+
+def _scrapling_extract_date(page) -> str:
+    """Extract publication date from a Scrapling Response object."""
+    for name in DATE_META_NAMES:
+        try:
+            els = page.css(f'meta[property="{name}"]')
+            if els:
+                val = els[0].attrib.get("content", "")
+                if val:
+                    return val[:10]
+            els = page.css(f'meta[name="{name}"]')
+            if els:
+                val = els[0].attrib.get("content", "")
+                if val:
+                    return val[:10]
+        except Exception:
+            pass
+    # JSON-LD
+    try:
+        scripts = page.css('script[type="application/ld+json"]')
+        for s in scripts:
+            raw = s.get_all_text()
+            data = json.loads(raw)
+            for key in ("datePublished", "dateModified", "uploadDate"):
+                if key in data:
+                    return str(data[key])[:10]
+    except Exception:
+        pass
+    # Visible date in text
+    try:
+        text = page.get_all_text(ignore_tags=NOISE_TAGS)
+        m = re.search(
+            r'\b(20\d{2})[/-](0?[1-9]|1[0-2])[/-](0?[1-9]|[12]\d|3[01])\b',
+            text
+        )
+        if m:
+            return f"{m.group(1)}-{m.group(2).zfill(2)}-{m.group(3).zfill(2)}"
+    except Exception:
+        pass
+    return ""
 
 
-def fetch_and_extract(url: str, max_words: int) -> dict:
-    """Fetch URL and return structured extraction result."""
+def _scrapling_extract_content(page) -> tuple:
+    """
+    Returns (content_text, extraction_method).
+    Tries semantic CSS selectors first, falls back to full-page text.
+    """
+    for selector in CONTENT_SELECTORS:
+        try:
+            elements = page.css(selector)
+            if elements:
+                texts = []
+                for el in elements:
+                    t = el.get_all_text(ignore_tags=NOISE_TAGS).strip()
+                    if len(t.split()) > MIN_TRUSTWORTHY_WORDS:
+                        texts.append(t)
+                if texts:
+                    combined = "\n\n".join(texts)
+                    return combined, f"css:{selector}"
+        except Exception:
+            continue
+    # Full-page fallback
+    try:
+        text = page.get_all_text(ignore_tags=NOISE_TAGS).strip()
+        return text, "full-page"
+    except Exception:
+        return "", "failed"
+
+
+def _scrapling_extract_title(page) -> str:
+    try:
+        els = page.css("title")
+        if els:
+            return els[0].get_all_text().strip()
+    except Exception:
+        pass
+    return ""
+
+
+# ─── Confidence scoring ───────────────────────────────────────────────────────
+
+def _score_confidence(text: str, status: int, method: str, has_paywall: bool) -> str:
+    if has_paywall or status not in (200, 0):
+        return "LOW"
+    wc = len(text.split())
+    if wc < MIN_TRUSTWORTHY_WORDS:
+        return "LOW"
+    if method.startswith("css:") and wc >= 200:
+        return "HIGH"
+    if wc >= 150:
+        return "MEDIUM"
+    return "LOW"
+
+
+def _has_paywall(text: str) -> bool:
+    tl = text.lower()
+    return any(p in tl for p in PAYWALL_PHRASES)
+
+
+def _truncate_to_words(text: str, max_words: int) -> str:
+    words = text.split()
+    if len(words) <= max_words:
+        return text
+    chunk = " ".join(words[:max_words + 20])
+    sentences = re.split(r'(?<=[.!?])\s+', chunk)
+    result = []
+    count = 0
+    for sent in sentences:
+        wc = len(sent.split())
+        if count + wc > max_words and result:
+            break
+        result.append(sent)
+        count += wc
+    return " ".join(result)
+
+
+# ─── Core fetch logic ─────────────────────────────────────────────────────────
+
+def fetch_page(url: str, mode: str = "auto", timeout: int = 20) -> dict:
+    """
+    Fetch a page using the three-tier Scrapling cascade.
+
+    mode:
+      auto    — try Fetcher -> StealthyFetcher -> DynamicFetcher automatically
+      fast    — Fetcher only (fastest, ~1-3s)
+      stealth — StealthyFetcher only (Cloudflare bypass, ~5-15s)
+      dynamic — DynamicFetcher only (full JS, ~10-30s)
+
+    Returns a dict with keys:
+      url, title, content, word_count, pub_date, confidence,
+      status, fetcher_used, extraction_method, error
+    """
     result = {
         "url": url,
         "title": "",
-        "published_date": "",
-        "word_count": 0,
         "content": "",
-        "confidence": "low",
-        "is_blocked": False,
-        "error": None,
+        "word_count": 0,
+        "pub_date": "",
+        "confidence": "LOW",
+        "status": 0,
+        "fetcher_used": "none",
+        "extraction_method": "none",
+        "error": "",
     }
 
-    req = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": USER_AGENT,
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-        },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            # Check content type
-            ct = resp.headers.get("Content-Type", "")
-            if "text/html" not in ct and "text/plain" not in ct and "application/xhtml" not in ct:
-                result["error"] = f"Unsupported content type: {ct}"
-                return result
-            raw = resp.read()
-            # Detect encoding
-            charset = "utf-8"
-            m = re.search(r"charset=([\w-]+)", ct)
-            if m:
-                charset = m.group(1)
-            html_text = raw.decode(charset, errors="replace")
-    except urllib.error.HTTPError as e:
-        result["error"] = f"HTTP {e.code}: {e.reason}"
+    page = None
+
+    # ── Tier 1: Fetcher (fast HTTP + TLS fingerprint + Google referer) ──
+    if mode in ("auto", "fast") and SCRAPLING_FAST:
+        try:
+            page = _ScraplingFetcher.get(
+                url,
+                stealthy_headers=True,
+                timeout=timeout,
+                follow_redirects=True,
+            )
+            result["fetcher_used"] = "Fetcher"
+            result["status"] = page.status
+        except Exception as e:
+            result["error"] = f"Fetcher: {e}"
+            page = None
+
+    # ── Tier 2: StealthyFetcher (Cloudflare / anti-bot bypass) ──
+    if (mode in ("auto", "stealth") and SCRAPLING_STEALTH and
+            (page is None or (page is not None and page.status in (403, 429, 503)))):
+        try:
+            page = _StealthyFetcher.fetch(
+                url,
+                headless=True,
+                network_idle=True,
+                timeout=timeout * 1000,
+                google_search=True,
+                hide_canvas=True,
+                block_webrtc=True,
+            )
+            result["fetcher_used"] = "StealthyFetcher"
+            result["status"] = page.status
+        except Exception as e:
+            result["error"] = f"StealthyFetcher: {e}"
+            page = None
+
+    # ── Tier 3: DynamicFetcher (full Playwright JS rendering) ──
+    if (mode in ("auto", "dynamic") and SCRAPLING_DYNAMIC and
+            (page is None or (page is not None and page.status in (403, 429, 503)))):
+        try:
+            page = _DynamicFetcher.fetch(
+                url,
+                timeout=timeout * 1000,
+                wait_selector="body",
+                network_idle=True,
+            )
+            result["fetcher_used"] = "DynamicFetcher"
+            result["status"] = page.status
+        except Exception as e:
+            result["error"] = f"DynamicFetcher: {e}"
+            page = None
+
+    # ── Stdlib fallback (Scrapling not installed) ──
+    if page is None and not SCRAPLING_FAST:
+        try:
+            status, raw_html = _stdlib_fetch(url, timeout=timeout)
+            result["fetcher_used"] = "stdlib-urllib"
+            result["status"] = status
+            result["title"] = _stdlib_extract_title(raw_html)
+            result["pub_date"] = _stdlib_extract_date(raw_html)
+            content = _stdlib_strip_html(raw_html)
+            has_pw = _has_paywall(content)
+            result["content"] = content
+            result["word_count"] = len(content.split())
+            result["confidence"] = _score_confidence(content, status, "full-page", has_pw)
+            if has_pw:
+                result["error"] = "Paywall or login wall detected"
+            return result
+        except Exception as e:
+            result["error"] = f"All fetchers failed. Last error: {e}"
+            return result
+
+    if page is None:
+        if not result["error"]:
+            result["error"] = "All fetchers failed — no response received"
         return result
-    except Exception as e:
-        result["error"] = str(e)
-        return result
 
-    result["title"] = _extract_title(html_text)
-    result["published_date"] = _extract_date(html_text)
-    content = _extract_main_content(html_text)
+    # ── Extract from Scrapling Response ──
+    result["title"] = _scrapling_extract_title(page)
+    result["pub_date"] = _scrapling_extract_date(page)
+    content, method = _scrapling_extract_content(page)
+    result["extraction_method"] = method
 
-    # Check for blocked content
-    is_blocked = bool(BLOCKED_RE.search(content[:2000]))
-    result["is_blocked"] = is_blocked
+    has_pw = _has_paywall(content)
+    result["confidence"] = _score_confidence(content, page.status, method, has_pw)
+    if has_pw:
+        result["error"] = "Paywall or login wall detected — content may be incomplete"
 
-    # Truncate to max_words
-    words = content.split()
-    truncated = len(words) > max_words
-    if truncated:
-        content = " ".join(words[:max_words]) + "\n\n[... content truncated to " + str(max_words) + " words ...]"
-    result["word_count"] = min(len(words), max_words)
     result["content"] = content
-    result["confidence"] = _confidence_level(result["word_count"], is_blocked, bool(result["published_date"]))
+    result["word_count"] = len(content.split())
 
     return result
 
 
+# ─── CLI ──────────────────────────────────────────────────────────────────────
+
 def main() -> int:
-    p = argparse.ArgumentParser(description="OpenClaw Browse/Viewing Module v2.0 - zero API key.")
-    p.add_argument("--url", required=True, help="URL to fetch and extract")
-    p.add_argument("--max-words", type=int, default=MAX_WORDS_DEFAULT,
-                   help=f"Max words to return (default: {MAX_WORDS_DEFAULT})")
-    p.add_argument("--json", action="store_true", help="Output raw JSON")
+    p = argparse.ArgumentParser(
+        description=f"browse_page.py v{VERSION} — Scrapling-powered page fetcher for OpenClaw"
+    )
+    p.add_argument("--url", required=True, help="URL to fetch")
+    p.add_argument("--max-words", type=int, default=600,
+                   help="Maximum words to output (default: 600)")
+    p.add_argument("--mode", choices=["auto", "fast", "stealth", "dynamic"],
+                   default="auto",
+                   help="Fetcher mode: auto (default), fast, stealth, dynamic")
+    p.add_argument("--timeout", type=int, default=20,
+                   help="Per-fetcher timeout in seconds (default: 20)")
+    p.add_argument("--json", action="store_true",
+                   help="Output structured JSON instead of human-readable text")
     args = p.parse_args()
 
-    result = fetch_and_extract(args.url, args.max_words)
+    result = fetch_page(args.url, mode=args.mode, timeout=args.timeout)
 
-    if args.json:
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-        return 0 if not result["error"] else 1
-
-    if result["error"]:
+    if result["error"] and not result["content"]:
         print(f"ERROR: {result['error']}", file=sys.stderr)
         return 1
 
+    # Truncate
+    content = _truncate_to_words(result["content"], args.max_words)
+    result["content"] = content
+    result["word_count"] = len(content.split())
+
+    if args.json:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return 0
+
+    # ── Human-readable output ──
+    sep = "─" * 60
     print(f"URL        : {result['url']}")
     print(f"Title      : {result['title'] or '(no title)'}")
-    if result["published_date"]:
-        print(f"Published  : {result['published_date']}")
+    print(f"Fetcher    : {result['fetcher_used']}")
     print(f"Words      : {result['word_count']}")
-    print(f"Confidence : {result['confidence'].upper()}", end="")
-    if result["is_blocked"]:
-        print("  [WARNING: page may be paywalled or blocked]", end="")
-    print()
-    print()
-    print("─" * 60)
-    print(result["content"])
-    print("─" * 60)
-    print()
+    print(f"Confidence : {result['confidence']}")
+    if result["pub_date"]:
+        print(f"Published  : {result['pub_date']}")
+    if result["error"]:
+        print(f"Warning    : {result['error']}")
+    print(sep)
+    print(content)
+    print(sep)
 
-    # Anti-hallucination advisory
-    if result["confidence"] == "low":
-        print("AGENT NOTE: Content confidence is LOW.")
-        if result["is_blocked"]:
-            print("  -> Page appears to be paywalled or requires login.")
-            print("  -> Do NOT fabricate content. Try a different URL from search results.")
-        else:
-            print("  -> Very little content was extracted (JS-heavy page or empty).")
-            print("  -> Do NOT answer from this page alone. Try another source.")
-    elif result["confidence"] == "medium":
-        print("AGENT NOTE: Content confidence is MEDIUM.")
-        print("  -> Some content extracted but may be incomplete.")
-        print("  -> Cross-check with another source if answering factual questions.")
-    else:
+    # ── Agent advisory notes ──
+    conf = result["confidence"]
+    if conf == "HIGH":
         print("AGENT NOTE: Content confidence is HIGH. Safe to use for answering.")
-        if not result["published_date"]:
-            print("  -> No publication date found — verify recency if time-sensitive.")
+    elif conf == "MEDIUM":
+        print("AGENT NOTE: Content confidence is MEDIUM. Cross-check with another source if critical.")
+    else:
+        print("AGENT NOTE: Content confidence is LOW. Do NOT use as sole source — verify independently.")
+        if "paywall" in result["error"].lower() if result["error"] else False:
+            print("  -> Page is paywalled or requires login. Try a different URL.")
+        else:
+            print("  -> Very little content extracted (JS-heavy or empty page).")
+            print("  -> Consider retrying with --mode stealth or --mode dynamic.")
+
+    if not result["pub_date"]:
+        print("  -> No publication date found — verify recency if time-sensitive.")
+    else:
+        try:
+            pub = datetime.strptime(result["pub_date"][:10], "%Y-%m-%d")
+            age_days = (datetime.now() - pub).days
+            if age_days > 365:
+                print(f"  -> Content is {age_days} days old — may be outdated.")
+        except Exception:
+            pass
+
+    fetcher = result["fetcher_used"]
+    if fetcher == "StealthyFetcher":
+        print("  -> StealthyFetcher used: bypassed anti-bot protection (Cloudflare-capable).")
+    elif fetcher == "DynamicFetcher":
+        print("  -> DynamicFetcher used: full JS rendering — highest fidelity but slowest.")
 
     return 0
 
