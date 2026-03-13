@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # SECURITY MANIFEST:
-#   Environment variables accessed: none
+#   Environment variables accessed: LOCAL_SEARCH_PROXY (optional), HTTPS_PROXY/ALL_PROXY variants (optional)
 #   External endpoints called: any URL explicitly passed via --url argument (HTTP GET only)
 #   Local files read: none
 #   Local files written: none
 #   Data sent externally: standard HTTP GET request to the URL you provide — no POST data, no credentials
 """
-browse_page.py  v3.0  — OpenClaw Free Web Search Skill
+browse_page.py  v3.1  — OpenClaw Free Web Search Skill
 =======================================================
 Powered by Scrapling (https://github.com/D4Vinci/Scrapling)
 
@@ -15,7 +15,7 @@ Three-tier fetcher cascade (all free, no API key):
   Tier 2 — StealthyFetcher: Headless Chrome with Cloudflare Turnstile bypass
   Tier 3 — DynamicFetcher : Full Playwright browser for JS-heavy / anti-bot sites
 
-Features absorbed from community skills:
+Features:
   - Adaptive element extraction (survives website redesigns)
   - Semantic main-content detection via CSS priority scoring
   - Paywall / login-wall / 404 detection and graceful rejection
@@ -23,6 +23,8 @@ Features absorbed from community skills:
   - Hallucination guard: confidence scoring + cross-field consistency check
   - Word-count capping with smart sentence boundary truncation
   - Structured JSON output mode for Agent pipelines
+  - Automatic proxy detection (env vars + common local ports 7890/7897/1080)
+  - Local Chrome detection for StealthyFetcher/DynamicFetcher (macOS)
 
 Usage:
   python3 browse_page.py --url <URL> [--max-words 600] [--mode auto|fast|stealth|dynamic]
@@ -31,6 +33,9 @@ Usage:
 Dependencies:
   pip install scrapling[all]   # for full anti-bot / JS rendering support
   (falls back to stdlib urllib if Scrapling is not installed)
+
+Model-agnostic: works with any LLM acting as OpenClaw commander
+(Claude, GPT-4, Gemini, Mistral, Llama, DeepSeek, Qwen, etc.)
 """
 
 from __future__ import annotations
@@ -39,6 +44,7 @@ import html as html_module
 import json
 import os
 import re
+import socket
 import sys
 import urllib.parse
 import urllib.request
@@ -46,14 +52,11 @@ from datetime import datetime
 from typing import Optional
 
 # ─── Scrapling import with graceful fallback ──────────────────────────────────
-# Auto-install hint: if Scrapling is missing, print a one-line fix and continue
-# in stdlib-urllib fallback mode (still functional, but no anti-bot capability).
 try:
     from scrapling.fetchers import Fetcher as _ScraplingFetcher
     SCRAPLING_FAST = True
 except Exception:
     SCRAPLING_FAST = False
-    # Only warn once, not on every import
     if not os.environ.get("_BROWSE_SCRAPLING_WARNED"):
         print(
             "[browse_page] WARNING: Scrapling not installed — running in stdlib-urllib fallback mode.\n"
@@ -78,9 +81,8 @@ except Exception:
     SCRAPLING_DYNAMIC = False
 
 # ─── Constants ────────────────────────────────────────────────────────────────
-VERSION = "3.0.0"
+VERSION = "3.1.0"
 
-# Phrases that indicate the page content is gated
 PAYWALL_PHRASES = [
     "subscribe to read", "subscribe to continue", "sign in to read",
     "create a free account", "this content is for subscribers",
@@ -89,7 +91,6 @@ PAYWALL_PHRASES = [
     "access denied", "403 forbidden", "page not found", "404 not found",
 ]
 
-# CSS selectors tried in priority order for main content extraction
 CONTENT_SELECTORS = [
     "article",
     "main",
@@ -111,14 +112,12 @@ CONTENT_SELECTORS = [
     "div[itemprop='description']",
 ]
 
-# Tags to strip from extracted text
 NOISE_TAGS = (
     "script", "style", "nav", "footer", "header",
     "aside", "form", "button", "noscript", "iframe",
     "figure", "figcaption",
 )
 
-# Stdlib fallback: regex-based strip tags
 STRIP_TAGS_RE = re.compile(
     r"<(script|style|nav|header|footer|aside|form|button|noscript|iframe|svg)[^>]*>.*?</\1>",
     re.DOTALL | re.IGNORECASE,
@@ -127,7 +126,6 @@ TAG_RE = re.compile(r"<[^>]+>")
 WS_RE = re.compile(r"[ \t]+")
 NL_RE = re.compile(r"\n{3,}")
 
-# Date meta tag names to check
 DATE_META_NAMES = [
     "article:published_time", "datePublished", "pubdate",
     "publish_date", "DC.date", "article:modified_time",
@@ -135,6 +133,55 @@ DATE_META_NAMES = [
 ]
 
 MIN_TRUSTWORTHY_WORDS = 80
+
+# Proxy auto-detection: common local proxy ports (Clash, V2Ray, Shadowsocks)
+COMMON_PROXY_PORTS = ("7890", "7897", "1080")
+
+
+# ─── Proxy & Chrome detection ─────────────────────────────────────────────────
+
+def _port_open(host: str, port: str, timeout: float = 0.3) -> bool:
+    """Check if a local port is accepting connections."""
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _resolve_proxy_url() -> Optional[str]:
+    """
+    Resolve proxy URL from environment variables or auto-detect common local proxies.
+    Priority: LOCAL_SEARCH_PROXY > HTTPS_PROXY > ALL_PROXY > auto-detect ports.
+    """
+    for env_name in ("LOCAL_SEARCH_PROXY", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"):
+        value = os.environ.get(env_name)
+        if value:
+            return value
+    for port in COMMON_PROXY_PORTS:
+        if _port_open("127.0.0.1", port):
+            return f"http://127.0.0.1:{port}"
+    return None
+
+
+def _should_relax_tls(proxy_url: Optional[str]) -> bool:
+    """Relax TLS verification for local MITM proxies (Clash, mitmproxy, etc.)."""
+    if not proxy_url:
+        return False
+    return proxy_url.startswith("http://127.0.0.1:") or proxy_url.startswith("http://localhost:")
+
+
+def _has_real_chrome() -> bool:
+    """
+    Detect if a real Chrome browser is installed (macOS).
+    When available, StealthyFetcher/DynamicFetcher will prefer it over
+    Playwright's bundled Chromium for better anti-bot evasion.
+    """
+    chrome_paths = (
+        "/Applications/Google Chrome.app",
+        "/Applications/Google Chrome Canary.app",
+    )
+    return any(os.path.exists(path) for path in chrome_paths)
 
 
 # ─── Stdlib helpers (used when Scrapling unavailable) ─────────────────────────
@@ -337,16 +384,22 @@ def fetch_page(url: str, mode: str = "auto", timeout: int = 20) -> dict:
     }
 
     page = None
+    proxy_url = _resolve_proxy_url()
+    use_real_chrome = _has_real_chrome()
 
     # ── Tier 1: Fetcher (fast HTTP + TLS fingerprint + Google referer) ──
     if mode in ("auto", "fast") and SCRAPLING_FAST:
         try:
-            page = _ScraplingFetcher.get(
-                url,
-                stealthy_headers=True,
-                timeout=timeout,
-                follow_redirects=True,
-            )
+            request_kwargs = {
+                "stealthy_headers": True,
+                "timeout": timeout,
+                "follow_redirects": True,
+            }
+            if proxy_url and url.startswith("https://"):
+                request_kwargs["proxy"] = proxy_url
+                if _should_relax_tls(proxy_url):
+                    request_kwargs["verify"] = False
+            page = _ScraplingFetcher.get(url, **request_kwargs)
             result["fetcher_used"] = "Fetcher"
             result["status"] = page.status
         except Exception as e:
@@ -365,6 +418,8 @@ def fetch_page(url: str, mode: str = "auto", timeout: int = 20) -> dict:
                 google_search=True,
                 hide_canvas=True,
                 block_webrtc=True,
+                real_chrome=use_real_chrome,
+                proxy=proxy_url,
             )
             result["fetcher_used"] = "StealthyFetcher"
             result["status"] = page.status
@@ -381,6 +436,8 @@ def fetch_page(url: str, mode: str = "auto", timeout: int = 20) -> dict:
                 timeout=timeout * 1000,
                 wait_selector="body",
                 network_idle=True,
+                real_chrome=use_real_chrome,
+                proxy=proxy_url,
             )
             result["fetcher_used"] = "DynamicFetcher"
             result["status"] = page.status

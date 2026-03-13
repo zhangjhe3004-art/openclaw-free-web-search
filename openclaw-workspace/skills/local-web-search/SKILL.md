@@ -1,13 +1,13 @@
 ---
 name: local-web-search
 description: >
-  Free, private, real-time web search for OpenClaw — zero API keys required.
+  Free, private, real-time web search for any OpenClaw commander model — zero API keys required.
   Powered by self-hosted SearXNG + Scrapling anti-bot engine. Multi-engine
   parallel search (Bing/DuckDuckGo/Google/Startpage/Qwant), intent-aware
   Agent Reach query expansion, three-tier Browse/Viewing (Fetcher →
   StealthyFetcher → DynamicFetcher for Cloudflare/JS sites), cross-engine
   anti-hallucination validation, multi-source factual claim cross-verification
-  with confidence scoring, and automatic public fallback.
+  with confidence scoring, automatic proxy detection, and automatic public fallback.
 homepage: https://github.com/wd041216-bit/openclaw-free-web-search
 metadata:
   clawdbot:
@@ -17,11 +17,30 @@ metadata:
     files: ["scripts/*"]
 ---
 
-# Local Free Web Search v4.0
+# Local Free Web Search v4.1
 
-Use this skill when the user needs current or real-time web information.
+> **Model-agnostic.** Works with Claude, GPT-4, Gemini, Mistral, Llama, DeepSeek, and any other model configured as your OpenClaw commander.
+
+Use this skill when the agent needs current or real-time web information.
 Powered by **Scrapling** (anti-bot) + **SearXNG** (self-hosted search).
 Zero API keys. Zero cost. Runs entirely locally.
+
+---
+
+## Compatibility
+
+This skill is designed for **any LLM that can run shell commands via OpenClaw's tool interface**. It does not rely on any model-specific API, function-calling format, or proprietary feature. The three tools are standard Python scripts invoked via `python3` — any model that can execute a shell command can use this skill.
+
+| Commander model | Compatible |
+|---|---|
+| Claude (Anthropic) | ✅ |
+| GPT-4 / GPT-4o (OpenAI) | ✅ |
+| Gemini 1.5 / 2.0 (Google) | ✅ |
+| Mistral / Mixtral | ✅ |
+| Llama 3 / 3.1 (Meta) | ✅ |
+| DeepSeek | ✅ |
+| Qwen | ✅ |
+| Any model with shell tool access | ✅ |
 
 ---
 
@@ -51,9 +70,13 @@ No personal data, no credentials, no conversation history is ever sent to any en
 
 ---
 
-## Model Invocation Note
+## Proxy Support
 
-This skill is invoked autonomously by the agent when a query requires live web information. You can disable autonomous invocation by removing this skill from your workspace. The agent will only use this skill when it determines real-time information is needed.
+Both `search_local_web.py` and `browse_page.py` support proxies automatically:
+
+- If `LOCAL_SEARCH_PROXY`, `HTTPS_PROXY`, or `ALL_PROXY` environment variable is set, it will be used
+- If no proxy env var is set, the skill **auto-detects** common local proxies on `127.0.0.1:7890`, `7897`, and `1080`
+- For `stealth` and `dynamic` modes, the skill prefers an installed local Chrome browser when available (checks `/Applications/Google Chrome.app`), so it can work even before Playwright finishes downloading its own Chromium bundle
 
 ---
 
@@ -144,6 +167,7 @@ python3 ~/.openclaw/workspace/skills/local-web-search/scripts/verify_claim.py \
 | Flag | Description |
 |---|---|
 | `--sources N` | Number of sources to check (default: 5, max recommended: 10) |
+| `--urls URL1 URL2 ...` | Skip search, verify against known URLs directly |
 | `--searxng-url URL` | Override SearXNG URL |
 | `--json` | Machine-readable JSON output |
 
@@ -183,3 +207,4 @@ cd "$(cat ~/.openclaw/workspace/skills/local-web-search/.project_root)" && ./sta
 - For sites behind Cloudflare or requiring JS, use `browse_page.py --mode stealth`.
 - For specific factual claims (dates, numbers, names, events), use `verify_claim.py` to get a multi-source confidence score before asserting.
 - **Never assert a claim with `UNCERTAIN`, `LIKELY_FALSE`, or `UNVERIFIABLE` verdict** — tell the user the evidence is insufficient instead.
+- **This skill works identically regardless of which LLM model is acting as the OpenClaw commander.** No model-specific behavior is assumed.

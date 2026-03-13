@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
 # SECURITY MANIFEST:
-#   Environment variables accessed: LOCAL_SEARCH_URL (optional), LOCAL_SEARCH_FALLBACK_URL (optional)
+#   Environment variables accessed: LOCAL_SEARCH_URL (optional), LOCAL_SEARCH_FALLBACK_URL (optional),
+#                                   LOCAL_SEARCH_PROXY (optional), HTTPS_PROXY/ALL_PROXY variants (optional)
 #   External endpoints called: http://127.0.0.1:18080 (local SearXNG, default), https://searx.be (fallback only)
 #   Local files read: ~/.openclaw/workspace/skills/local-web-search/.project_root (path hint only)
 #   Local files written: none
 #   Data sent externally: search query string only — no personal data, no credentials
 """
-search_local_web.py  v3.0  — OpenClaw Free Web Search Skill
+search_local_web.py  v3.1  — OpenClaw Free Web Search Skill
 ============================================================
 Multi-engine parallel search via local SearXNG + public fallback.
 Zero API keys required. 100% free and private.
 
-New in v3.0 (Scrapling integration):
+New in v3.1:
+  - Automatic proxy detection (env vars + common local ports 7890/7897/1080)
+  - Proxy forwarded to Scrapling Fetcher for public SearXNG instances
+
+Features from v3.0 (Scrapling integration):
   - Scrapling Fetcher used for SearXNG requests: TLS fingerprint spoofing,
     realistic browser headers, Google referer — dramatically improves
     acceptance rate on public SearXNG instances
@@ -34,18 +39,23 @@ Usage:
   python3 search_local_web.py --query "python async" --intent tutorial
   python3 search_local_web.py --query "AI news" --intent news --freshness day
   python3 search_local_web.py --query "UW iSchool dean" --browse
+
+Model-agnostic: works with any LLM acting as OpenClaw commander
+(Claude, GPT-4, Gemini, Mistral, Llama, DeepSeek, Qwen, etc.)
 """
 
 from __future__ import annotations
 import argparse
 import json
 import os
+import socket
 import subprocess
 import sys
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import Optional
 
 # ─── Scrapling import with graceful fallback ──────────────────────────────────
 try:
@@ -55,10 +65,10 @@ except Exception:
     SCRAPLING_AVAILABLE = False
 
 # ─── Configuration ────────────────────────────────────────────────────────────
-DEFAULT_LOCAL_URL   = os.environ.get("LOCAL_SEARCH_URL",         "http://127.0.0.1:18080")
+DEFAULT_LOCAL_URL   = os.environ.get("LOCAL_SEARCH_URL",          "http://127.0.0.1:18080")
 PUBLIC_FALLBACK_URL = os.environ.get("LOCAL_SEARCH_FALLBACK_URL", "https://searx.be")
 
-# Realistic Chrome User-Agent (replaces old "OpenClawFreeSearch/2.0")
+# Realistic Chrome User-Agent
 BROWSER_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -100,6 +110,42 @@ INVALID_CONTENT_PATTERNS = [
     "subscribe to read", "sign in to continue", "enable javascript",
     "please enable cookies", "this content is for subscribers",
 ]
+
+# Proxy auto-detection: common local proxy ports (Clash, V2Ray, Shadowsocks)
+COMMON_PROXY_PORTS = ("7890", "7897", "1080")
+
+
+# ─── Proxy detection ──────────────────────────────────────────────────────────
+
+def _port_open(host: str, port: str, timeout: float = 0.3) -> bool:
+    """Check if a local port is accepting connections."""
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _resolve_proxy_url() -> Optional[str]:
+    """
+    Resolve proxy URL from environment variables or auto-detect common local proxies.
+    Priority: LOCAL_SEARCH_PROXY > HTTPS_PROXY > ALL_PROXY > auto-detect ports.
+    """
+    for env_name in ("LOCAL_SEARCH_PROXY", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"):
+        value = os.environ.get(env_name)
+        if value:
+            return value
+    for port in COMMON_PROXY_PORTS:
+        if _port_open("127.0.0.1", port):
+            return f"http://127.0.0.1:{port}"
+    return None
+
+
+def _should_relax_tls(proxy_url: Optional[str]) -> bool:
+    """Relax TLS verification for local MITM proxies (Clash, mitmproxy, etc.)."""
+    if not proxy_url:
+        return False
+    return proxy_url.startswith("http://127.0.0.1:") or proxy_url.startswith("http://localhost:")
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -231,13 +277,18 @@ def _fetch_single_scrapling(base_url: str, query: str, engine: str,
     if freshness:
         params["time_range"] = freshness
     url = f"{base_url}/search?{urllib.parse.urlencode(params)}"
+    proxy_url = _resolve_proxy_url()
+    request_kwargs = {
+        "stealthy_headers": True,
+        "timeout": 15,
+        "follow_redirects": True,
+    }
+    if proxy_url and base_url.startswith("https://"):
+        request_kwargs["proxy"] = proxy_url
+        if _should_relax_tls(proxy_url):
+            request_kwargs["verify"] = False
     try:
-        page = _ScraplingFetcher.get(
-            url,
-            stealthy_headers=True,
-            timeout=15,
-            follow_redirects=True,
-        )
+        page = _ScraplingFetcher.get(url, **request_kwargs)
         if page.status != 200:
             return []
         data = json.loads(page.body.decode("utf-8", errors="replace"))
@@ -318,24 +369,23 @@ def _parallel_search(base_url: str, queries: list, engines: list,
             url_map[url].setdefault("_engines_seen", set())
 
     merged = []
-    for url, item in url_map.items():
-        es = item.pop("_engines_seen", set())
-        item["_engine_count"] = len(es)
-        item["_seen_in_engines"] = sorted(es)
+    for _, item in url_map.items():
+        seen_engines = item.pop("_engines_seen", set())
+        item["_engine_count"] = len(seen_engines)
+        item["_seen_in_engines"] = sorted(seen_engines)
         merged.append(item)
 
-    # Filter invalid
     valid = [
-        i for i in merged
-        if not _is_invalid_url(i.get("url", ""))
-        and not _is_invalid_content(i.get("content", ""))
+        item for item in merged
+        if not _is_invalid_url(item.get("url", ""))
+        and not _is_invalid_content(item.get("content", ""))
     ]
 
-    # Optional: downrank old results
     if max_age_days:
         import datetime
         cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=max_age_days)
-        def _is_too_old(item):
+
+        def _is_too_old(item: dict) -> bool:
             pub = item.get("publishedDate", "")
             if not pub:
                 return False
@@ -346,52 +396,49 @@ def _parallel_search(base_url: str, queries: list, engines: list,
                 except ValueError:
                     continue
             return False
-        for i in valid:
-            if _is_too_old(i):
-                i["_age_penalty"] = True
 
-    # Score and sort
-    for i in valid:
-        base = _score(i)
-        if i.get("_age_penalty"):
-            base *= 0.5
-        i["_score"] = base
+        for item in valid:
+            if _is_too_old(item):
+                item["_age_penalty"] = True
 
-    valid.sort(key=lambda x: x["_score"], reverse=True)
+    for item in valid:
+        score = _score(item)
+        if item.get("_age_penalty"):
+            score *= 0.5
+        item["_score"] = score
+
+    valid.sort(key=lambda item: item["_score"], reverse=True)
     return valid[:limit]
 
 
-# ─── CLI ──────────────────────────────────────────────────────────────────────
-
 def main() -> int:
-    p = argparse.ArgumentParser(
-        description="OpenClaw Free Web Search v4.0 — multi-engine, Scrapling-powered, cross-validation, zero API key."
+    parser = argparse.ArgumentParser(
+        description="OpenClaw Free Web Search v3.1 — multi-engine, Scrapling-powered, zero API key."
     )
-    p.add_argument("--query", required=True, help="Search query")
-    p.add_argument("--limit", type=int, default=5,
-                   help="Max results to return (default: 5)")
-    p.add_argument("--intent",
-                   choices=["factual", "news", "research", "tutorial",
-                             "comparison", "privacy", "general"],
-                   default="general",
-                   help="Query intent — selects optimal engine set")
-    p.add_argument("--engines", default=None,
-                   help="Override engines (comma-separated): bing,duckduckgo,google,startpage,qwant")
-    p.add_argument("--freshness",
-                   choices=["hour", "day", "week", "month", "year"],
-                   default=None,
-                   help="Filter results by recency")
-    p.add_argument("--max-age-days", type=int, default=None,
-                   help="Downrank results older than N days")
-    p.add_argument("--no-expand", action="store_true",
-                   help="Disable Agent Reach query expansion")
-    p.add_argument("--browse", action="store_true",
-                   help="Auto-browse top result with browse_page.py after search")
-    p.add_argument("--json", action="store_true",
-                   help="Output raw JSON")
-    args = p.parse_args()
+    parser.add_argument("--query", required=True, help="Search query")
+    parser.add_argument("--limit", type=int, default=5,
+                        help="Max results to return (default: 5)")
+    parser.add_argument("--intent",
+                        choices=["factual", "news", "research", "tutorial",
+                                 "comparison", "privacy", "general"],
+                        default="general",
+                        help="Query intent — selects optimal engine set")
+    parser.add_argument("--engines", default=None,
+                        help="Override engines (comma-separated): bing,duckduckgo,google,startpage,qwant")
+    parser.add_argument("--freshness",
+                        choices=["hour", "day", "week", "month", "year"],
+                        default=None,
+                        help="Filter results by recency")
+    parser.add_argument("--max-age-days", type=int, default=None,
+                        help="Downrank results older than N days")
+    parser.add_argument("--no-expand", action="store_true",
+                        help="Disable Agent Reach query expansion")
+    parser.add_argument("--browse", action="store_true",
+                        help="Auto-browse top result with browse_page.py after search")
+    parser.add_argument("--json", action="store_true",
+                        help="Output raw JSON")
+    args = parser.parse_args()
 
-    # Engine selection
     if args.engines:
         engines = [e.strip() for e in args.engines.split(",")
                    if e.strip() in ALL_ENGINES]
@@ -402,18 +449,15 @@ def main() -> int:
     else:
         engines = INTENT_ENGINE_MAP.get(args.intent, INTENT_ENGINE_MAP["general"])
 
-    # Query expansion
     queries = [args.query] if args.no_expand else _expand_query(args.query, args.intent)
 
-    # Search with fallback chain
     results = []
     used_url = DEFAULT_LOCAL_URL
     for base_url in [DEFAULT_LOCAL_URL, PUBLIC_FALLBACK_URL]:
         if not base_url:
             continue
         results = _parallel_search(
-            base_url, queries, engines, args.limit,
-            args.freshness, args.max_age_days
+            base_url, queries, engines, args.limit, args.freshness, args.max_age_days
         )
         if results:
             used_url = base_url
@@ -430,7 +474,6 @@ def main() -> int:
         print(json.dumps(results, indent=2, default=str))
         return 0
 
-    # ── Human-readable output ──
     is_fallback = used_url != DEFAULT_LOCAL_URL
     fetcher_label = "Scrapling (TLS fingerprint)" if SCRAPLING_AVAILABLE else "stdlib urllib"
     print(f"Query     : {args.query}")
@@ -443,28 +486,28 @@ def main() -> int:
         print(f"Freshness : {args.freshness}")
     if args.max_age_days:
         print(f"Max age   : {args.max_age_days} days")
-    src = f"public fallback ({used_url})" if is_fallback else "local SearXNG"
-    print(f"Source    : {src}")
+    source_label = f"public fallback ({used_url})" if is_fallback else "local SearXNG"
+    print(f"Source    : {source_label}")
     print(f"Results   : {len(results)}")
     print()
 
     for idx, item in enumerate(results, 1):
-        title   = (item.get("title") or "").strip() or "(no title)"
-        url     = (item.get("url") or "").strip() or "(no url)"
+        title = (item.get("title") or "").strip() or "(no title)"
+        url = (item.get("url") or "").strip() or "(no url)"
         snippet = " ".join((item.get("content") or "").split())
-        pub     = (item.get("publishedDate") or "").strip()
-        engs    = ", ".join(item.get("_seen_in_engines", []))
-        score   = item.get("_score", 0)
-        cross   = item.get("_engine_count", 1) > 1
-        aged    = item.get("_age_penalty", False)
+        published = (item.get("publishedDate") or "").strip()
+        seen_engines = ", ".join(item.get("_seen_in_engines", []))
+        score = item.get("_score", 0)
+        cross_validated = item.get("_engine_count", 1) > 1
+        aged = item.get("_age_penalty", False)
 
         print(f"{idx}. {title}")
         print(f"   URL      : {url}")
-        if pub:
-            print(f"   Published: {pub}")
-        if engs:
-            line = f"   Engines  : {engs}"
-            if cross:
+        if published:
+            print(f"   Published: {published}")
+        if seen_engines:
+            line = f"   Engines  : {seen_engines}"
+            if cross_validated:
                 line += "  [cross-validated]"
             print(line)
         score_line = f"   Score    : {score:.1f}/100"
@@ -475,19 +518,16 @@ def main() -> int:
             print(f"   Snippet  : {snippet[:300]}{'...' if len(snippet) > 300 else ''}")
         print()
 
-    cross_count = sum(1 for r in results if r.get("_engine_count", 1) > 1)
+    cross_count = sum(1 for item in results if item.get("_engine_count", 1) > 1)
     print("-" * 60)
     print(f"AGENT NOTE: {cross_count}/{len(results)} results cross-validated across engines.")
     print("  -> Prefer higher Score + [cross-validated] results.")
     print("  -> Use browse_page.py to read full page before answering.")
     print("  -> Do NOT state facts from snippets alone — always verify via page content.")
-    print("  -> For factual claims, use verify_claim.py for multi-source cross-validation:")
-    print(f'     python3 verify_claim.py --claim "<your claim here>" --sources 5')
     if not SCRAPLING_AVAILABLE:
         print("  -> TIP: pip install scrapling[all] for better public instance acceptance rate.")
     print("-" * 60)
 
-    # ── Auto-browse top result ──
     if args.browse and results:
         top_url = (results[0].get("url") or "").strip()
         if top_url:
@@ -497,12 +537,11 @@ def main() -> int:
             browse_script = Path(__file__).parent / "browse_page.py"
             try:
                 subprocess.run(
-                    [sys.executable, str(browse_script),
-                     "--url", top_url, "--max-words", "600"],
+                    [sys.executable, str(browse_script), "--url", top_url, "--max-words", "600"],
                     check=False,
                 )
-            except Exception as e:
-                print(f"browse_page.py error: {e}", file=sys.stderr)
+            except Exception as exc:
+                print(f"browse_page.py error: {exc}", file=sys.stderr)
 
     return 0
 
